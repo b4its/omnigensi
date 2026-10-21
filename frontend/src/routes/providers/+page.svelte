@@ -20,6 +20,7 @@
     Terminal,
     Pencil,
     Power,
+    Activity,
   } from 'lucide-svelte';
 
   let providers = $state<any[]>([]);
@@ -28,6 +29,10 @@
   let showCreateModal = $state<boolean>(false);
   let editingProviderId = $state<string | null>(null);
   let syncLoading = $state<Record<string, boolean>>({});
+  let testLoading = $state<Record<string, boolean>>({});
+  let providerHealth = $state<
+    Record<string, { ok: boolean; latency_ms: number; model_count: number; error?: string | null }>
+  >({});
   let selectedProviderModels = $state<{ providerName: string; models: any[] } | null>(null);
   let selectedMcpTools = $state<{ serverName: string; tools: any[] } | null>(null);
   let mcpLoading = $state<Record<string, boolean>>({});
@@ -279,6 +284,31 @@
     }
   }
 
+  /** Actively probe the provider; /models cannot be trusted for this. */
+  async function handleTestProvider(provider: any) {
+    testLoading[provider.id] = true;
+    try {
+      const res = await api.testProvider(provider.id);
+      providerHealth[provider.id] = {
+        ok: res.ok,
+        latency_ms: res.latency_ms,
+        model_count: res.model_count,
+        error: res.error,
+      };
+      if (res.ok) {
+        notify.success(
+          `${provider.name}: OK - ${res.model_count} models in ${res.latency_ms}ms`
+        );
+      } else {
+        notify.error(`${provider.name}: ${res.error ?? 'Connection failed'}`);
+      }
+    } catch (err) {
+      notify.fromError(err, 'Connection test failed');
+    } finally {
+      testLoading[provider.id] = false;
+    }
+  }
+
   async function handleSyncModels(provider: any) {
     syncLoading[provider.id] = true;
     try {
@@ -373,16 +403,49 @@
               </span>
             </div>
 
+            {#if providerHealth[prov.id]}
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-[var(--text-muted)]">Connectivity:</span>
+                <span
+                  class="font-code font-bold text-[10px] {providerHealth[prov.id].ok
+                    ? 'text-[var(--status-success)]'
+                    : 'text-[var(--status-danger)]'}"
+                  title={providerHealth[prov.id].error ?? ''}
+                >
+                  {providerHealth[prov.id].ok
+                    ? `REACHABLE · ${providerHealth[prov.id].latency_ms}ms`
+                    : 'UNREACHABLE'}
+                </span>
+              </div>
+            {/if}
+
             <div class="pt-3 border-t border-[var(--border-color)]/40 flex items-center justify-between gap-2">
-              <button
-                type="button"
-                disabled={syncLoading[prov.id]}
-                onclick={() => handleSyncModels(prov)}
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-hud text-[var(--accent-primary)] border border-[var(--accent-primary)]/40 hover:bg-[var(--accent-primary)]/10 chamfer-sm transition-colors cursor-pointer disabled:opacity-50"
-              >
-                <RefreshCw class="w-3.5 h-3.5 {syncLoading[prov.id] ? 'animate-spin' : ''}" />
-                <span>{syncLoading[prov.id] ? 'SYNCING...' : 'SYNC MODELS'}</span>
-              </button>
+              <div class="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={syncLoading[prov.id]}
+                  onclick={() => handleSyncModels(prov)}
+                  class="inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-hud text-[var(--accent-primary)] border border-[var(--accent-primary)]/40 hover:bg-[var(--accent-primary)]/10 chamfer-sm transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw class="w-3.5 h-3.5 {syncLoading[prov.id] ? 'animate-spin' : ''}" />
+                  <span>{syncLoading[prov.id] ? 'SYNCING...' : 'SYNC MODELS'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={testLoading[prov.id]}
+                  onclick={() => handleTestProvider(prov)}
+                  title="Actively verify credentials and reachability"
+                  class="inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-hud border chamfer-sm transition-colors cursor-pointer disabled:opacity-50 {providerHealth[prov.id]?.ok === true
+                    ? 'border-[var(--status-success)]/50 text-[var(--status-success)]'
+                    : providerHealth[prov.id]?.ok === false
+                      ? 'border-[var(--status-danger)]/50 text-[var(--status-danger)]'
+                      : 'border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+                >
+                  <Activity class="w-3.5 h-3.5 {testLoading[prov.id] ? 'animate-pulse' : ''}" />
+                  <span>{testLoading[prov.id] ? 'TESTING...' : 'TEST'}</span>
+                </button>
+              </div>
 
               <div class="flex items-center gap-1">
                 <button
