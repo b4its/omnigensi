@@ -16,6 +16,9 @@ from app.models.provider_model import ProviderModel
 from app.schemas.provider import (
     ChatTestRequest,
     ChatTestResult,
+    DraftChatTestRequest,
+    DraftDiscoveryRequest,
+    DraftDiscoveryResponse,
     ModelInfo,
     ModelSyncResult,
     ProviderCreate,
@@ -120,6 +123,57 @@ async def list_providers(
         )
         for p in providers
     ]
+
+
+@router.post("/discover-draft", response_model=DraftDiscoveryResponse)
+async def discover_draft_models(payload: DraftDiscoveryRequest) -> Any:
+    """List models for credentials that have not been saved yet.
+
+    Lets the registration form validate and show a model picker before the
+    provider exists, so a bad key is caught at entry rather than on first use.
+    """
+    result = await discover_models(
+        payload.base_url, payload.api_key, None
+    )
+    return DraftDiscoveryResponse(
+        ok=result.ok,
+        models=[
+            ModelInfo(
+                id=m["model_id"],
+                name=m.get("display_name"),
+                context_length=m.get("context_length"),
+                description=m.get("description"),
+                pricing=m.get("pricing") or None,
+            )
+            for m in result.models
+        ],
+        checked_url=result.checked_url,
+        latency_ms=result.latency_ms,
+        error=result.error,
+    )
+
+
+@router.post("/chat-test-draft", response_model=ChatTestResult)
+async def chat_test_draft(payload: DraftChatTestRequest) -> Any:
+    """Real completion using unsaved credentials and a chosen model."""
+    probe = await probe_chat(
+        base_url=payload.base_url,
+        api_key=payload.api_key,
+        model_id=payload.model_id,
+        prompt=payload.prompt,
+        provider_type=payload.provider_type,
+    )
+    return ChatTestResult(
+        ok=probe.ok,
+        model_id=probe.model_id,
+        response_text=probe.response_text,
+        latency_ms=probe.latency_ms,
+        status_code=probe.status_code,
+        prompt_tokens=probe.prompt_tokens,
+        completion_tokens=probe.completion_tokens,
+        checked_url=probe.checked_url,
+        error=probe.error,
+    )
 
 
 @router.get("/{provider_id}", response_model=ProviderResponse)

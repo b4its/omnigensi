@@ -4,6 +4,7 @@
   import { notify } from '$lib/stores/notify.svelte';
   import CyberCard from '$lib/components/ui/CyberCard.svelte';
   import CyberButton from '$lib/components/ui/CyberButton.svelte';
+  import ProviderModelPanel from '$lib/components/providers/ProviderModelPanel.svelte';
   import {
     Server,
     Plus,
@@ -56,6 +57,8 @@
   let formApiKey = $state<string>('');
   let formApiKeyTouched = $state<boolean>(false);
   let formIsActive = $state<boolean>(true);
+  let formDefaultModel = $state<string | null>(null);
+  let autoSyncOnSave = $state<boolean>(true);
   let formError = $state<string>('');
   let formSubmitting = $state<boolean>(false);
 
@@ -197,6 +200,7 @@
     formApiKey = '';
     formApiKeyTouched = false;
     formIsActive = true;
+    formDefaultModel = null;
     formError = '';
   }
 
@@ -213,6 +217,7 @@
     formApiKey = '';
     formApiKeyTouched = false;
     formIsActive = provider.is_active ?? true;
+    formDefaultModel = provider.default_model ?? null;
     formError = '';
     showCreateModal = true;
   }
@@ -239,16 +244,30 @@
         if (formApiKeyTouched && formApiKey.trim()) {
           payload.api_key = formApiKey;
         }
+        if (formDefaultModel) {
+          payload.default_model = formDefaultModel;
+        }
         await api.updateProvider(editingProviderId, payload);
+        notify.success('Provider updated');
       } else {
-        await api.createProvider({
-          name: formName,
-          provider_type: formType,
-          base_url: formBaseUrl,
-          api_key: formApiKey,
-          default_headers: {},
-          is_active: formIsActive,
-        });
+        const created = await api.createProvider(
+          {
+            name: formName,
+            provider_type: formType,
+            base_url: formBaseUrl,
+            api_key: formApiKey,
+            default_headers: {},
+            is_active: formIsActive,
+            default_model: formDefaultModel,
+          },
+          autoSyncOnSave
+        );
+        if (autoSyncOnSave) {
+          const count = created?.default_model ? ' with a default model' : '';
+          notify.success(`Provider registered${count}`);
+        } else {
+          notify.success('Provider registered');
+        }
       }
       showCreateModal = false;
       resetProviderForm();
@@ -598,7 +617,7 @@
   <!-- Create Modal -->
   {#if showCreateModal}
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-      <div class="w-full max-w-lg border border-[var(--accent-primary)] bg-[var(--bg-surface)] p-6 chamfer shadow-[var(--border-glow)] space-y-4">
+      <div class="w-full max-w-lg max-h-[92dvh] overflow-y-auto border border-[var(--accent-primary)] bg-[var(--bg-surface)] p-4 sm:p-6 chamfer shadow-[var(--border-glow)] space-y-4">
         <div class="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
           <div class="font-hud font-bold text-sm text-[var(--text-primary)]">
             {editingProviderId ? 'EDIT LLM GATEWAY' : 'REGISTER NEW LLM GATEWAY'}
@@ -693,13 +712,48 @@
             </label>
           </div>
 
-          <div class="pt-3 border-t border-[var(--border-color)] flex justify-end gap-2">
-            <CyberButton variant="ghost" size="sm" type="button" onclick={() => showCreateModal = false}>
-              CANCEL
-            </CyberButton>
-            <CyberButton variant="primary" size="sm" type="submit" disabled={formSubmitting}>
-              {formSubmitting ? 'SAVING...' : editingProviderId ? 'SAVE CHANGES' : 'ENCRYPT & SAVE'}
-            </CyberButton>
+          <!-- Model workspace: auto-add models, pick one, test a real reply -->
+          <div class="pt-3 border-t border-[var(--border-color)]">
+            <ProviderModelPanel
+              providerId={editingProviderId}
+              draftBaseUrl={formBaseUrl}
+              draftApiKey={formApiKey}
+              draftProviderType={formType}
+              selectedModelId={formDefaultModel}
+              onDefaultModelChange={(id) => (formDefaultModel = id)}
+            />
+          </div>
+
+          {#if !editingProviderId}
+            <div>
+              <label class="flex items-start gap-2 text-[var(--text-muted)] cursor-pointer select-none">
+                <input type="checkbox" bind:checked={autoSyncOnSave} class="accent-[var(--accent-primary)] w-4 h-4 mt-0.5" />
+                <span>
+                  Auto-add models on save
+                  <span class="block text-[10px] opacity-75">
+                    Discovers and stores the provider's model list immediately after registering.
+                  </span>
+                </span>
+              </label>
+            </div>
+          {/if}
+
+          <div class="pt-3 border-t border-[var(--border-color)] flex items-center justify-between gap-2">
+            <span class="text-[10px] text-[var(--text-muted)] truncate">
+              {#if formDefaultModel}
+                Model: <span class="text-[var(--accent-primary)]">{formDefaultModel}</span>
+              {:else}
+                No model selected
+              {/if}
+            </span>
+            <div class="flex gap-2 shrink-0">
+              <CyberButton variant="ghost" size="sm" type="button" onclick={() => showCreateModal = false}>
+                CANCEL
+              </CyberButton>
+              <CyberButton variant="primary" size="sm" type="submit" disabled={formSubmitting}>
+                {formSubmitting ? 'SAVING...' : editingProviderId ? 'SAVE CHANGES' : 'ENCRYPT & SAVE'}
+              </CyberButton>
+            </div>
           </div>
         </form>
       </div>

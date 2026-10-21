@@ -120,3 +120,26 @@ class ChatTestResult(BaseModel):
     completion_tokens: Optional[int] = None
     checked_url: Optional[str] = None
     error: Optional[str] = None
+
+
+class DraftDiscoveryRequest(BaseModel):
+    """Probe a provider that has not been saved yet."""
+
+    base_url: str = Field(..., max_length=255)
+    api_key: str = Field(default="")
+    provider_type: str = Field(default="custom", max_length=50)
+
+
+class DraftDiscoveryResponse(BaseModel):
+    ok: bool
+    models: List[ModelInfo] = Field(default_factory=list)
+    checked_url: Optional[str] = None
+    latency_ms: int = 0
+    error: Optional[str] = None
+
+
+class DraftChatTestRequest(DraftDiscoveryRequest):
+    """Run a chat completion against unsaved credentials."""
+
+    model_id: str = Field(..., min_length=1, max_length=255)
+    prompt: str = Field(default="Reply with the single word: OK", min_length=1, max_length=2000)

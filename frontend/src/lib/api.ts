@@ -202,13 +202,108 @@ export const api = {
 	getProviders: (page?: PageParams) =>
 		apiFetch<any[]>('/api/v1/providers', { params: page as Record<string, number> }),
 	getProvider: (id: string) => apiFetch<any>(`/api/v1/providers/${id}`),
-	createProvider: (data: any) =>
-		apiFetch<any>('/api/v1/providers', { method: 'POST', body: JSON.stringify(data) }),
+	createProvider: (data: any, autoSyncModels = false) =>
+		apiFetch<any>(
+			`/api/v1/providers${autoSyncModels ? '?auto_sync_models=true' : ''}`,
+			{ method: 'POST', body: JSON.stringify(data), timeoutMs: 40_000 }
+		),
 	updateProvider: (id: string, data: any) =>
 		apiFetch<any>(`/api/v1/providers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 	deleteProvider: (id: string) =>
 		apiFetch<void>(`/api/v1/providers/${id}`, { method: 'DELETE' }),
 	getProviderModels: (id: string) => apiFetch<any[]>(`/api/v1/providers/${id}/models`),
+
+	/** Discover and store every model the provider reports. */
+	syncProviderModels: (id: string) =>
+		apiFetch<{
+			ok: boolean;
+			provider_id: string;
+			discovered: number;
+			added: number;
+			updated: number;
+			marked_unavailable: number;
+			total_stored: number;
+			checked_url?: string | null;
+			latency_ms: number;
+			error?: string | null;
+		}>(`/api/v1/providers/${id}/models/sync`, {
+			method: 'POST',
+			timeoutMs: 30_000
+		}),
+
+	/** Models already stored for this provider (no live call). */
+	getProviderModelRegistry: (id: string) =>
+		apiFetch<any[]>(`/api/v1/providers/${id}/model-registry`),
+
+	/** Choose which stored model the provider should use by default. */
+	setDefaultProviderModel: (id: string, modelId: string) =>
+		apiFetch<any>(`/api/v1/providers/${id}/default-model`, {
+			method: 'PUT',
+			body: JSON.stringify({ model_id: modelId })
+		}),
+
+	/** Probe unsaved credentials during registration. */
+	discoverDraftModels: (data: {
+		base_url: string;
+		api_key?: string;
+		provider_type?: string;
+	}) =>
+		apiFetch<{
+			ok: boolean;
+			models: { id: string; name?: string | null; context_length?: number | null }[];
+			checked_url?: string | null;
+			latency_ms: number;
+			error?: string | null;
+		}>('/api/v1/providers/discover-draft', {
+			method: 'POST',
+			body: JSON.stringify(data),
+			timeoutMs: 30_000
+		}),
+
+	/** Chat completion against unsaved credentials. */
+	testDraftChat: (data: {
+		base_url: string;
+		api_key?: string;
+		provider_type?: string;
+		model_id: string;
+		prompt?: string;
+	}) =>
+		apiFetch<{
+			ok: boolean;
+			model_id: string;
+			response_text?: string | null;
+			latency_ms: number;
+			prompt_tokens?: number | null;
+			completion_tokens?: number | null;
+			error?: string | null;
+		}>('/api/v1/providers/chat-test-draft', {
+			method: 'POST',
+			body: JSON.stringify(data),
+			timeoutMs: 70_000,
+			retries: 0
+		}),
+
+	/** Run a real completion to prove key + model + routing work. */
+	testProviderChat: (id: string, modelId?: string, prompt?: string) =>
+		apiFetch<{
+			ok: boolean;
+			model_id: string;
+			response_text?: string | null;
+			latency_ms: number;
+			status_code?: number | null;
+			prompt_tokens?: number | null;
+			completion_tokens?: number | null;
+			checked_url?: string | null;
+			error?: string | null;
+		}>(`/api/v1/providers/${id}/chat-test`, {
+			method: 'POST',
+			body: JSON.stringify({
+				model_id: modelId,
+				prompt: prompt ?? 'Reply with the single word: OK'
+			}),
+			timeoutMs: 70_000,
+			retries: 0
+		}),
 	testProvider: (id: string) =>
 		apiFetch<{
 			ok: boolean;
