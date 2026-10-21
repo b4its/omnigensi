@@ -65,6 +65,21 @@
   let finalMarkdown = $state<string>('');
   let generatedFiles = $state<any[]>([]);
 
+  // --- Streaming resilience (mobile networks drop connections constantly) ---
+  const MAX_LOG_ENTRIES = 400;
+  const MAX_RECONNECT_ATTEMPTS = 5;
+  let lastEventId = $state<number>(0);
+  let reconnectAttempts = $state<number>(0);
+  let streamError = $state<string | null>(null);
+  let reconnecting = $state<boolean>(false);
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Trim telemetry so long runs cannot grow the DOM unboundedly on mobile. */
+  function pushLog(entry: TerminalEntry) {
+    const next = [...terminalLogs, entry];
+    terminalLogs = next.length > MAX_LOG_ENTRIES ? next.slice(-MAX_LOG_ENTRIES) : next;
+  }
+
   // Human-in-the-Loop Device Approval
   let pendingApproval = $state<{
     execution_id: string;
@@ -103,6 +118,7 @@
   });
 
   onDestroy(() => {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
     if (eventSource) {
       eventSource.close();
       eventSource = null;
@@ -129,8 +145,13 @@
         if (existing.generated_files && existing.generated_files.length > 0) {
           generatedFiles = existing.generated_files;
         }
-        if (existing.total_tokens) totalTokens = existing.total_tokens;
-        if (existing.estimated_cost_usd) estimatedCost = Number(existing.estimated_cost_usd);
+        totalTokens = existing.total_tokens ?? 0;
+        estimatedCost = Number(existing.estimated_cost_usd ?? 0);
+        revisionCount = existing.execution_logs
+          ? existing.execution_logs.filter(
+              (l: any) => (l.type ?? l.event) === 'review_result'
+            ).length
+          : 0;
 
         if (existing.status === 'completed' || existing.status === 'failed') {
           isExecuting = false;
@@ -145,27 +166,60 @@
           return;
         }
       }
-    } catch (_) {}
+    } catch (err) {
+      isExecuting = false;
+      streamError =
+        err instanceof Error ? err.message : 'Unable to load this execution';
+      pushLog({
+        type: 'error',
+        message: `[HYDRATION FAILED]: ${streamError}`,
+        timestamp: new Date().toLocaleTimeString(),
+      });
+      notify.fromError(err, 'Unable to load this execution');
+      return;
+    }
 
+    connectStream(execId);
+  }
+
+  /** Opens (or re-opens) the SSE stream, resuming from the last seen event id. */
+  function connectStream(execId: string) {
     if (eventSource) {
       eventSource.close();
+      eventSource = null;
+    }
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
 
     const streamUrl = api.getExecutionStreamUrl(execId);
     eventSource = new EventSource(streamUrl);
 
+    // Track the SSE cursor so a reconnect can ask for replay.
+    const trackCursor = (e: MessageEvent) => {
+      const raw = (e as MessageEvent & { lastEventId?: string }).lastEventId;
+      const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+      if (!Number.isNaN(parsed)) lastEventId = parsed;
+    };
+
     eventSource.addEventListener('connected', (e: MessageEvent) => {
-      terminalLogs = [
-        ...terminalLogs,
-        {
-          type: 'info',
-          message: 'SSE Stream uplink established with core orchestrator.',
-          timestamp: new Date().toLocaleTimeString(),
-        },
-      ];
+      trackCursor(e);
+      reconnecting = false;
+      streamError = null;
+      reconnectAttempts = 0;
+      pushLog({
+        type: 'info',
+        message:
+          lastEventId > 0
+            ? `SSE stream resumed from event #${lastEventId}.`
+            : 'SSE Stream uplink established with core orchestrator.',
+        timestamp: new Date().toLocaleTimeString(),
+      });
     });
 
     eventSource.addEventListener('agent_start', (e: MessageEvent) => {
+      trackCursor(e);
       const data = JSON.parse(e.data);
       activeNodeId = data.node_id;
       activeAgentName = data.agent_name;
@@ -184,6 +238,7 @@
     });
 
     eventSource.addEventListener('token_chunk', (e: MessageEvent) => {
+      trackCursor(e);
       const data = JSON.parse(e.data);
       if (data.chunk) {
         streamBuffer += data.chunk;
@@ -191,6 +246,7 @@
     });
 
     eventSource.addEventListener('review_result', (e: MessageEvent) => {
+      trackCursor(e);
       const data = JSON.parse(e.data);
       reviewerDecision = {
         is_approved: data.is_approved,
@@ -209,6 +265,7 @@
     });
 
     eventSource.addEventListener('device_approval_required', (e: MessageEvent) => {
+      trackCursor(e);
       const data = JSON.parse(e.data);
       pendingApproval = data;
       terminalLogs = [
@@ -222,6 +279,7 @@
     });
 
     eventSource.addEventListener('supervisor_directive', (e: MessageEvent) => {
+      trackCursor(e);
       const data = JSON.parse(e.data);
       terminalLogs = [
         ...terminalLogs,
@@ -234,8 +292,13 @@
     });
 
     eventSource.addEventListener('device_file_write', async (e: MessageEvent) => {
+      trackCursor(e);
       const data = JSON.parse(e.data);
-      generatedFiles = [...generatedFiles, data];
+      // A re-delivered event after reconnect must not duplicate the card.
+      generatedFiles = [
+        ...generatedFiles.filter((f: any) => f.filename !== data.filename),
+        data,
+      ];
 
       terminalLogs = [
         ...terminalLogs,
@@ -257,6 +320,7 @@
     });
 
     eventSource.addEventListener('workflow_complete', (e: MessageEvent) => {
+      trackCursor(e);
       const data = JSON.parse(e.data);
       isExecuting = false;
       finalMarkdown = data.final_output || '';
@@ -280,6 +344,7 @@
     });
 
     eventSource.addEventListener('workflow_failed', (e: MessageEvent) => {
+      trackCursor(e);
       const data = JSON.parse(e.data);
       isExecuting = false;
       terminalLogs = [
@@ -298,8 +363,55 @@
     });
 
     eventSource.onerror = () => {
-      // Reconnection or close
+      // A closed stream means the browser gave up (non-200, CORS, mixed
+      // content). Otherwise it is a transient drop we should retry.
+      if (!eventSource || !isExecuting || !activeExecutionId) return;
+
+      eventSource.close();
+      eventSource = null;
+
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        isExecuting = false;
+        reconnecting = false;
+        streamError = 'Telemetry stream lost. Reconnect to resume monitoring.';
+        pushLog({
+          type: 'error',
+          message: `[STREAM LOST]: gave up after ${MAX_RECONNECT_ATTEMPTS} attempts.`,
+          timestamp: new Date().toLocaleTimeString(),
+        });
+        notify.error('Live telemetry disconnected. Use RECONNECT to resume.');
+        return;
+      }
+
+      reconnectAttempts += 1;
+      reconnecting = true;
+      const delay = Math.min(1000 * 2 ** (reconnectAttempts - 1), 15000);
+      pushLog({
+        type: 'info',
+        message: `[STREAM DROP]: reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`,
+        timestamp: new Date().toLocaleTimeString(),
+      });
+
+      reconnectTimer = setTimeout(() => {
+        if (!activeExecutionId || !isExecuting) return;
+        connectStream(activeExecutionId);
+      }, delay);
     };
+  }
+
+  /** Manual reconnect from the UI after the automatic retries gave up. */
+  function manualReconnect() {
+    if (!activeExecutionId) return;
+    reconnectAttempts = 0;
+    streamError = null;
+    isExecuting = true;
+    reconnecting = false;
+    pushLog({
+      type: 'info',
+      message: '[OPERATOR RECONNECT]: re-attaching to telemetry stream...',
+      timestamp: new Date().toLocaleTimeString(),
+    });
+    connectStream(activeExecutionId);
   }
 
   async function handleApproval(approved: boolean) {
@@ -358,6 +470,8 @@
   async function handleExecute() {
     if (!selectedWorkflowId || !taskPrompt.trim()) return;
 
+    // Reset every run-scoped value, including the stepper highlight, so a
+    // new dispatch never shows the previous run's last node as ACTIVE.
     isExecuting = true;
     finalMarkdown = '';
     generatedFiles = [];
@@ -365,6 +479,14 @@
     streamBuffer = '';
     reviewerDecision = null;
     revisionCount = 0;
+    totalTokens = 0;
+    estimatedCost = 0;
+    activeNodeId = null;
+    activeAgentName = '';
+    lastEventId = 0;
+    reconnectAttempts = 0;
+    reconnecting = false;
+    streamError = null;
 
     try {
       const res = await api.executeWorkflow(selectedWorkflowId, taskPrompt);
@@ -398,11 +520,37 @@
       <div class="px-3 py-1.5 rounded-sm border border-[var(--border-color)] bg-[var(--bg-surface)] text-xs font-code flex items-center gap-2">
         <span class="w-2.5 h-2.5 rounded-full {isExecuting ? 'bg-[var(--accent-primary)] animate-ping' : 'bg-[var(--text-muted)]'}"></span>
         <span class="font-bold {isExecuting ? 'text-[var(--accent-primary)]' : 'text-[var(--text-muted)]'}">
-          {isExecuting ? 'STREAMING ACTIVE' : 'SYSTEM IDLE'}
+          {isExecuting ? (reconnecting ? 'RECONNECTING...' : 'STREAMING ACTIVE') : 'SYSTEM IDLE'}
         </span>
       </div>
     </div>
   </div>
+
+  <!-- Stream health banner: reconnecting / lost -->
+  {#if streamError || reconnecting}
+    <div
+      class="flex flex-wrap items-center justify-between gap-2 border chamfer-sm px-3 py-2.5 font-code text-xs {streamError
+        ? 'border-[var(--status-danger)]/60 bg-[var(--status-danger)]/10 text-[var(--status-danger)]'
+        : 'border-[var(--status-warning)]/60 bg-[var(--status-warning)]/10 text-[var(--status-warning)]'}"
+      role="status"
+    >
+      <span class="flex items-center gap-2 min-w-0">
+        <AlertTriangle class="w-4 h-4 shrink-0" />
+        <span class="break-words">
+          {streamError ?? `Telemetry stream dropped. Reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`}
+        </span>
+      </span>
+      {#if streamError && activeExecutionId}
+        <button
+          type="button"
+          onclick={manualReconnect}
+          class="shrink-0 px-3 py-2 font-hud font-bold border border-current chamfer-sm"
+        >
+          RECONNECT
+        </button>
+      {/if}
+    </div>
+  {/if}
 
   <!-- 3-Column Execution Console -->
   <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
