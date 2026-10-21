@@ -162,21 +162,18 @@ async def run_execution_background(
             await publisher.close()
 
 
-@router.post("/workflows/{workflow_id}/execute", response_model=ExecutionResponse, status_code=status.HTTP_202_ACCEPTED)
-async def trigger_workflow_execution(
-    workflow_id: uuid.UUID,
-    payload: ExecutionCreate,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
-) -> Any:
-    workflow = await db.get(Workflow, workflow_id)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="Workflow not found")
+async def _dispatch_execution(
+    db: AsyncSession, workflow: Workflow, task_prompt: str
+) -> WorkflowExecution:
+    """Creates the execution row and starts the background run.
 
+    Shared by the execute and retry endpoints so both produce identical
+    records and telemetry.
+    """
     execution = WorkflowExecution(
         workflow_id=workflow.id,
         status="running",
-        task_prompt=payload.task_prompt,
+        task_prompt=task_prompt,
         generated_files=[],
         execution_logs=[],
         total_tokens=0,
@@ -191,11 +188,25 @@ async def trigger_workflow_execution(
         run_execution_background(
             execution.id,
             workflow.id,
-            payload.task_prompt,
+            task_prompt,
         )
     )
     ACTIVE_EXECUTION_TASKS[str(execution.id)] = task
+    return execution
 
+
+@router.post("/workflows/{workflow_id}/execute", response_model=ExecutionResponse, status_code=status.HTTP_202_ACCEPTED)
+async def trigger_workflow_execution(
+    workflow_id: uuid.UUID,
+    payload: ExecutionCreate,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    workflow = await db.get(Workflow, workflow_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    execution = await _dispatch_execution(db, workflow, payload.task_prompt)
     return ExecutionResponse.model_validate(execution)
 
 
@@ -250,6 +261,63 @@ async def get_execution(
     if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
     return ExecutionResponse.model_validate(execution)
+
+
+@router.post(
+    "/{execution_id}/retry",
+    response_model=ExecutionResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_execution(
+    execution_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Any:
+    """Re-runs a past execution with the same workflow and prompt.
+
+    Creates a new execution rather than mutating history, so the original run
+    stays intact for comparison.
+    """
+    execution = await db.get(WorkflowExecution, execution_id)
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    if execution.status in ("running", "pending", "waiting_approval"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Execution is still {execution.status}; cancel it before retrying",
+        )
+
+    workflow = await db.get(Workflow, execution.workflow_id)
+    if not workflow:
+        raise HTTPException(
+            status_code=409,
+            detail="The workflow for this execution no longer exists",
+        )
+
+    retried = await _dispatch_execution(db, workflow, execution.task_prompt)
+    return ExecutionResponse.model_validate(retried)
+
+
+@router.delete("/{execution_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_execution(
+    execution_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> None:
+    """Removes one execution from history.
+
+    Refuses to delete a run that is still active so a background task cannot
+    resurrect a row the client just removed.
+    """
+    execution = await db.get(WorkflowExecution, execution_id)
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    if execution.status in ("running", "pending", "waiting_approval"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Execution is still {execution.status}; cancel it before deleting",
+        )
+
+    await db.delete(execution)
+    await db.commit()
 
 
 @router.post(

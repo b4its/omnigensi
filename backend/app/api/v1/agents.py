@@ -1,15 +1,25 @@
 import uuid
-from typing import List, Any
+from typing import List, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import Pagination
+import time
+
 from app.core.database import get_db
+from app.engine.llm_factory import create_llm_client
 from app.models.agent import AgentTemplate
 from app.models.provider import LLMProvider
-from app.schemas.agent import AgentCreate, AgentUpdate, AgentResponse
+from app.schemas.agent import (
+    AgentCreate,
+    AgentDuplicateRequest,
+    AgentResponse,
+    AgentTestRequest,
+    AgentTestResponse,
+    AgentUpdate,
+)
 from app.engine.tool_registry import DEVICE_TOOL_MAP
 
 router = APIRouter(prefix="/agents", tags=["Dynamic Agent Studio"])
@@ -226,3 +236,121 @@ async def delete_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
     await db.delete(agent)
     await db.commit()
+
+
+@router.post("/{agent_id}/test", response_model=AgentTestResponse)
+async def test_agent(
+    agent_id: uuid.UUID,
+    payload: AgentTestRequest,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Runs one agent persona against its provider with a single prompt.
+
+    Lets an operator sanity-check role/goal/backstory and the selected model
+    without wiring a workflow, mirroring the provider chat test.
+    """
+    agent = (
+        await db.execute(
+            select(AgentTemplate)
+            .options(selectinload(AgentTemplate.provider))
+            .where(AgentTemplate.id == agent_id)
+        )
+    ).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    provider = agent.provider
+    if not provider:
+        raise HTTPException(
+            status_code=400, detail="Agent has no provider configured"
+        )
+
+    system_prompt = (
+        f"You are {agent.name}.\n"
+        f"Role: {agent.role}\n"
+        f"Goal: {agent.goal}\n"
+        f"Backstory: {agent.backstory}"
+    )
+
+    started = time.perf_counter()
+    try:
+        llm = create_llm_client(
+            provider=provider,
+            model_name=agent.model_name,
+            temperature=agent.temperature,
+            max_tokens=payload.max_tokens or min(agent.max_tokens or 512, 1024),
+            streaming=False,
+        )
+        result = await llm.ainvoke(
+            [
+                ("system", system_prompt),
+                ("human", payload.prompt),
+            ]
+        )
+        latency = int((time.perf_counter() - started) * 1000)
+
+        text = result.content if hasattr(result, "content") else str(result)
+        if isinstance(text, list):
+            text = " ".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in text
+            )
+
+        usage = getattr(result, "usage_metadata", None) or {}
+        return AgentTestResponse(
+            ok=True,
+            agent_id=agent.id,
+            agent_name=agent.name,
+            model_name=agent.model_name,
+            provider_name=provider.name,
+            response_text=(text or "").strip(),
+            latency_ms=latency,
+            prompt_tokens=usage.get("input_tokens"),
+            completion_tokens=usage.get("output_tokens"),
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced to the operator
+        return AgentTestResponse(
+            ok=False,
+            agent_id=agent.id,
+            agent_name=agent.name,
+            model_name=agent.model_name,
+            provider_name=provider.name,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            error=str(exc),
+        )
+
+
+@router.post(
+    "/{agent_id}/duplicate",
+    response_model=AgentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def duplicate_agent(
+    agent_id: uuid.UUID,
+    payload: Optional[AgentDuplicateRequest] = None,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Clones an agent persona so a variant can be built quickly."""
+    source = await db.get(AgentTemplate, agent_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    name = (payload.name if payload else None) or f"{source.name} (copy)"
+    clone = AgentTemplate(
+        provider_id=source.provider_id,
+        name=name[:120],
+        avatar_code=source.avatar_code,
+        role=source.role,
+        goal=source.goal,
+        backstory=source.backstory,
+        node_type=source.node_type,
+        model_name=source.model_name,
+        temperature=source.temperature,
+        max_tokens=source.max_tokens,
+        tools_config=list(source.tools_config or []),
+        require_device_approval=source.require_device_approval,
+    )
+    db.add(clone)
+    await db.commit()
+    await db.refresh(clone)
+    return AgentResponse.model_validate(clone)

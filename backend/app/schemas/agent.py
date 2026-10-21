@@ -45,3 +45,31 @@ class AgentResponse(AgentBase):
     provider_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+
+class AgentTestRequest(BaseModel):
+    """Run a single agent persona without building a whole workflow."""
+
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    max_tokens: Optional[int] = Field(default=None, ge=1, le=2048)
+
+
+class AgentTestResponse(BaseModel):
+    """Result of a one-shot agent invocation."""
+
+    ok: bool
+    agent_id: uuid.UUID
+    agent_name: str
+    model_name: str
+    provider_name: Optional[str] = None
+    response_text: Optional[str] = None
+    latency_ms: int = 0
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    error: Optional[str] = None
+
+
+class AgentDuplicateRequest(BaseModel):
+    """Optional overrides when cloning an agent."""
+
+    name: Optional[str] = Field(default=None, max_length=120)

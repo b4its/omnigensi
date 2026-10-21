@@ -49,3 +49,30 @@ class WorkflowResponse(WorkflowBase):
     id: uuid.UUID
     created_at: datetime
     updated_at: datetime
+
+
+class GraphIssueSchema(BaseModel):
+    """One reason a workflow graph cannot run."""
+
+    code: str
+    message: str
+    node_id: Optional[str] = None
+    edge_index: Optional[int] = None
+    field: Optional[str] = None
+
+
+class GraphValidationResponse(BaseModel):
+    """Result of a dry-run graph validation."""
+
+    valid: bool
+    summary: str
+    node_count: int = 0
+    edge_count: int = 0
+    entry_point: Optional[str] = None
+    issues: List[GraphIssueSchema] = Field(default_factory=list)
+
+
+class WorkflowDuplicateRequest(BaseModel):
+    """Optional overrides when cloning a workflow."""
+
+    name: Optional[str] = Field(default=None, max_length=150)
