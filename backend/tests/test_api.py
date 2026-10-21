@@ -26,6 +26,7 @@ async def test_tools_list_endpoint():
         assert "create_markdown_document" in tool_ids
         assert "create_word_document" in tool_ids
         assert "create_pdf_document" in tool_ids
+        assert "create_code_file" in tool_ids
 
 
 @pytest.mark.asyncio
@@ -56,3 +57,32 @@ async def test_providers_and_agents_endpoints():
         assert resp_wf.status_code == 200
         workflows = resp_wf.json()
         assert len(workflows) >= 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_execution_endpoint():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Get workflow
+        resp_wf = await client.get("/api/v1/workflows")
+        assert resp_wf.status_code == 200
+        wf_id = resp_wf.json()[0]["id"]
+
+        # Trigger execution
+        resp_exec = await client.post(
+            f"/api/v1/executions/workflows/{wf_id}/execute",
+            json={"task_prompt": "Testing cancellation pipeline"},
+        )
+        assert resp_exec.status_code == 202
+        exec_id = resp_exec.json()["id"]
+
+        # Immediately cancel
+        resp_cancel = await client.post(f"/api/v1/executions/{exec_id}/cancel")
+        assert resp_cancel.status_code == 200
+        data = resp_cancel.json()
+        assert data["status"] in ("cancelled", "ok")
+
+        # Verify execution record has cancelled or completed
+        resp_check = await client.get(f"/api/v1/executions/{exec_id}")
+        assert resp_check.status_code == 200
+        assert resp_check.json()["status"] in ("cancelled", "completed")

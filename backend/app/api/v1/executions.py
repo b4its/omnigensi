@@ -29,6 +29,9 @@ from app.engine.token_cost import calculate_execution_summary
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/executions", tags=["Workflow Executions"])
 
+# Registry of active background execution tasks
+ACTIVE_EXECUTION_TASKS: dict[str, asyncio.Task] = {}
+
 
 async def run_execution_background(
     execution_id: uuid.UUID,
@@ -124,6 +127,23 @@ async def run_execution_background(
                 },
             )
 
+        except asyncio.CancelledError:
+            logger.info(f"Execution {execution_id} was aborted by operator")
+            try:
+                async with AsyncSessionLocal() as db_cancel:
+                    exec_obj = await db_cancel.get(WorkflowExecution, execution_id)
+                    if exec_obj and exec_obj.status == "running":
+                        exec_obj.status = "cancelled"
+                        exec_obj.final_output = "Execution aborted by operator."
+                        exec_obj.completed_at = datetime.now(timezone.utc)
+                        await db_cancel.commit()
+                await publisher.publish(
+                    "workflow_failed",
+                    {"status": "cancelled", "error": "Execution aborted by operator."},
+                )
+            except Exception as e_cancel:
+                logger.error(f"Error handling task cancellation: {e_cancel}")
+            raise
         except Exception as e:
             logger.error(f"Error during graph execution: {e}", exc_info=True)
             execution.status = "failed"
@@ -136,6 +156,7 @@ async def run_execution_background(
                 {"status": "failed", "error": str(e)},
             )
         finally:
+            ACTIVE_EXECUTION_TASKS.pop(str(execution_id), None)
             await publisher.close()
 
 
@@ -164,12 +185,14 @@ async def trigger_workflow_execution(
     await db.commit()
     await db.refresh(execution)
 
-    background_tasks.add_task(
-        run_execution_background,
-        execution.id,
-        workflow.id,
-        payload.task_prompt,
+    task = asyncio.create_task(
+        run_execution_background(
+            execution.id,
+            workflow.id,
+            payload.task_prompt,
+        )
     )
+    ACTIVE_EXECUTION_TASKS[str(execution.id)] = task
 
     return ExecutionResponse.model_validate(execution)
 
@@ -215,6 +238,42 @@ async def approve_tool_execution(
     return {"status": "ok", "message": "Approval status broadcasted"}
 
 
+@router.post("/{execution_id}/cancel")
+async def cancel_execution(
+    execution_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Aborts a running workflow execution, cancels active background tasks,
+    updates state to 'cancelled', and notifies SSE subscribers.
+    """
+    execution = await db.get(WorkflowExecution, execution_id)
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    if execution.status in ("completed", "failed", "cancelled"):
+        return {"status": "ok", "message": f"Execution already {execution.status}"}
+
+    # Cancel in-memory task
+    task = ACTIVE_EXECUTION_TASKS.get(str(execution_id))
+    if task and not task.done():
+        task.cancel()
+
+    execution.status = "cancelled"
+    execution.final_output = "Execution aborted by operator."
+    execution.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    publisher = ExecutionPublisher(str(execution_id))
+    await publisher.publish(
+        "workflow_failed",
+        {"status": "cancelled", "error": "Execution aborted by operator."},
+    )
+    await publisher.close()
+
+    return {"status": "cancelled", "message": "Execution cancelled successfully"}
+
+
 @router.get("/{execution_id}/stream")
 async def stream_execution_telemetry(execution_id: uuid.UUID) -> StreamingResponse:
     """
@@ -234,7 +293,7 @@ async def stream_execution_telemetry(execution_id: uuid.UUID) -> StreamingRespon
         # Check if execution already completed before SSE connected
         async with AsyncSessionLocal() as db_check:
             exec_obj = await db_check.get(WorkflowExecution, execution_id)
-            if exec_obj and exec_obj.status in ("completed", "failed"):
+            if exec_obj and exec_obj.status in ("completed", "failed", "cancelled"):
                 evt_type = "workflow_complete" if exec_obj.status == "completed" else "workflow_failed"
                 payload = {
                     "status": exec_obj.status,
@@ -277,7 +336,7 @@ async def stream_execution_telemetry(execution_id: uuid.UUID) -> StreamingRespon
                     if idle_ticks % 4 == 0:
                         async with AsyncSessionLocal() as db_check:
                             exec_obj = await db_check.get(WorkflowExecution, execution_id)
-                            if exec_obj and exec_obj.status in ("completed", "failed"):
+                            if exec_obj and exec_obj.status in ("completed", "failed", "cancelled"):
                                 evt_type = "workflow_complete" if exec_obj.status == "completed" else "workflow_failed"
                                 payload = {
                                     "status": exec_obj.status,

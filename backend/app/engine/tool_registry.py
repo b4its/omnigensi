@@ -170,6 +170,59 @@ def create_pdf_document(filename: str, title: str, body_text: str) -> Dict[str, 
 
 
 @tool
+def create_code_file(filename: str, code: str, language: str = "") -> Dict[str, Any]:
+    """
+    Creates or updates a source code, script, or configuration file in the local workspace directory.
+    Supports Python (.py), TypeScript (.ts), JavaScript (.js), Shell (.sh), SQL (.sql), JSON (.json), YAML (.yaml), etc.
+    Args:
+        filename: Name of the script/file with extension, e.g. 'pipeline.py', 'schema.sql', 'agent.ts'
+        code: Source code or configuration text
+        language: Optional language name or syntax tag, e.g. 'python', 'typescript', 'bash'
+    """
+    ext_mime_map = {
+        ".py": "text/x-python",
+        ".ts": "application/typescript",
+        ".js": "application/javascript",
+        ".sh": "application/x-sh",
+        ".bash": "application/x-sh",
+        ".sql": "application/sql",
+        ".json": "application/json",
+        ".yaml": "text/yaml",
+        ".yml": "text/yaml",
+        ".html": "text/html",
+        ".css": "text/css",
+        ".rs": "text/rust",
+        ".go": "text/x-go",
+        ".c": "text/x-c",
+        ".cpp": "text/x-c++",
+    }
+    
+    target_path = sanitize_workspace_path(filename)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    target_path.write_text(code, encoding="utf-8")
+    encoded_b64 = base64.b64encode(code.encode("utf-8")).decode("utf-8")
+    size_bytes = target_path.stat().st_size
+    file_ext = target_path.suffix.lower()
+    
+    mime_type = ext_mime_map.get(file_ext, "text/plain")
+    inferred_lang = language.lower() if language else file_ext.lstrip(".") or "text"
+
+    return {
+        "status": "success",
+        "action": "device_file_write",
+        "filename": target_path.name,
+        "filepath": str(target_path),
+        "file_type": "code",
+        "language": inferred_lang,
+        "mime_type": mime_type,
+        "size_bytes": size_bytes,
+        "content_base64": encoded_b64,
+        "message": f"Successfully created {inferred_lang} code file '{target_path.name}' ({size_bytes} bytes)",
+    }
+
+
+@tool
 def read_local_workspace_file(filename: str) -> Dict[str, Any]:
     """
     Reads the content of a local file inside the workspace folder.
@@ -287,6 +340,7 @@ DEVICE_TOOL_MAP = {
     "create_markdown_document": create_markdown_document,
     "create_word_document": create_word_document,
     "create_pdf_document": create_pdf_document,
+    "create_code_file": create_code_file,
     "read_local_workspace_file": read_local_workspace_file,
     "list_local_workspace_files": list_local_workspace_files,
     "mcp_read_file": mcp_read_file,
@@ -300,10 +354,19 @@ AVAILABLE_TOOLS_METADATA = [
     {
         "id": "create_markdown_document",
         "name": "Markdown Generator (.md)",
-        "description": "Writes structured Markdown reports, technical documentation, or code directly to local storage.",
+        "description": "Writes structured Markdown reports, technical documentation, or notes directly to local storage.",
         "icon": "file-text",
         "category": "document",
         "extension": ".md",
+        "requires_write": True,
+    },
+    {
+        "id": "create_code_file",
+        "name": "Code Script Builder (.py, .ts, .sh, .json)",
+        "description": "Writes production-grade source code, scripts, configuration, or SQL files directly to local workspace.",
+        "icon": "code",
+        "category": "code",
+        "extension": "*",
         "requires_write": True,
     },
     {

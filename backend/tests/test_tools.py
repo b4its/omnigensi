@@ -3,6 +3,7 @@ from app.engine.tool_registry import (
     create_markdown_document,
     create_word_document,
     create_pdf_document,
+    create_code_file,
     read_local_workspace_file,
     list_local_workspace_files,
 )
@@ -58,3 +59,20 @@ def test_read_and_list_workspace_files():
     read_res = read_local_workspace_file.invoke({"filename": "unit_test_spec.md"})
     assert read_res["status"] == "success"
     assert "# Test Header" in read_res["content"]
+
+
+def test_create_code_file():
+    code_content = "def calculate_hash(data: str) -> str:\n    return f'hash_{len(data)}'\n"
+    res = create_code_file.invoke({
+        "filename": "pipeline_generator.py",
+        "code": code_content,
+        "language": "python",
+    })
+    assert res["status"] == "success"
+    assert res["filename"] == "pipeline_generator.py"
+    assert res["file_type"] == "code"
+    assert res["language"] == "python"
+    assert res["mime_type"] == "text/x-python"
+    assert res["size_bytes"] == len(code_content.encode("utf-8"))
+    assert Path(res["filepath"]).exists()
+    assert Path(res["filepath"]).read_text(encoding="utf-8") == code_content
