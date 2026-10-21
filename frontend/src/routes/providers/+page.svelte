@@ -17,12 +17,15 @@
     Network,
     FolderTree,
     Terminal,
+    Pencil,
+    Power,
   } from 'lucide-svelte';
 
   let providers = $state<any[]>([]);
   let mcpServers = $state<any[]>([]);
   let loading = $state<boolean>(true);
   let showCreateModal = $state<boolean>(false);
+  let editingProviderId = $state<string | null>(null);
   let syncLoading = $state<Record<string, boolean>>({});
   let selectedProviderModels = $state<{ providerName: string; models: any[] } | null>(null);
   let selectedMcpTools = $state<{ serverName: string; tools: any[] } | null>(null);
@@ -34,6 +37,8 @@
   let formType = $state<string>('openrouter');
   let formBaseUrl = $state<string>('https://openrouter.ai/api/v1');
   let formApiKey = $state<string>('');
+  let formApiKeyTouched = $state<boolean>(false);
+  let formIsActive = $state<boolean>(true);
   let formError = $state<string>('');
   let formSubmitting = $state<boolean>(false);
 
@@ -70,7 +75,35 @@
 
   onMount(loadProviders);
 
-  async function handleCreateProvider(e: SubmitEvent) {
+  function resetProviderForm() {
+    editingProviderId = null;
+    formName = '';
+    formType = 'openrouter';
+    formBaseUrl = 'https://openrouter.ai/api/v1';
+    formApiKey = '';
+    formApiKeyTouched = false;
+    formIsActive = true;
+    formError = '';
+  }
+
+  function openCreateModal() {
+    resetProviderForm();
+    showCreateModal = true;
+  }
+
+  function openEditModal(provider: any) {
+    editingProviderId = provider.id;
+    formName = provider.name ?? '';
+    formType = provider.provider_type ?? 'custom';
+    formBaseUrl = provider.base_url ?? '';
+    formApiKey = '';
+    formApiKeyTouched = false;
+    formIsActive = provider.is_active ?? true;
+    formError = '';
+    showCreateModal = true;
+  }
+
+  async function handleSaveProvider(e: SubmitEvent) {
     e.preventDefault();
     if (!formName.trim() || !formBaseUrl.trim()) {
       formError = 'Please fill in Name and Base URL.';
@@ -80,22 +113,45 @@
     formSubmitting = true;
     formError = '';
     try {
-      await api.createProvider({
-        name: formName,
-        provider_type: formType,
-        base_url: formBaseUrl,
-        api_key: formApiKey,
-        default_headers: {},
-        is_active: true,
-      });
+      if (editingProviderId) {
+        // Only send the API key when the operator actually typed a new one,
+        // otherwise the existing encrypted key would be overwritten.
+        const payload: Record<string, any> = {
+          name: formName,
+          provider_type: formType,
+          base_url: formBaseUrl,
+          is_active: formIsActive,
+        };
+        if (formApiKeyTouched && formApiKey.trim()) {
+          payload.api_key = formApiKey;
+        }
+        await api.updateProvider(editingProviderId, payload);
+      } else {
+        await api.createProvider({
+          name: formName,
+          provider_type: formType,
+          base_url: formBaseUrl,
+          api_key: formApiKey,
+          default_headers: {},
+          is_active: formIsActive,
+        });
+      }
       showCreateModal = false;
-      formName = '';
-      formApiKey = '';
+      resetProviderForm();
       await loadProviders();
     } catch (err: any) {
-      formError = err.message || 'Failed to register provider';
+      formError = err.message || 'Failed to save provider';
     } finally {
       formSubmitting = false;
+    }
+  }
+
+  async function handleToggleProviderActive(provider: any) {
+    try {
+      await api.updateProvider(provider.id, { is_active: !provider.is_active });
+      await loadProviders();
+    } catch (err: any) {
+      alert(`Toggle failed: ${err.message}`);
     }
   }
 
@@ -147,7 +203,7 @@
       </p>
     </div>
 
-    <CyberButton variant="primary" onclick={() => showCreateModal = true}>
+    <CyberButton variant="primary" onclick={openCreateModal}>
       <Plus class="w-4 h-4" />
       <span>REGISTER PROVIDER</span>
     </CyberButton>
@@ -165,7 +221,7 @@
       <p class="text-xs text-[var(--text-muted)] max-w-md mx-auto">
         Add your first provider (OpenRouter, LiteLLM, OpenAI, or local Ollama) to start powering dynamic agents.
       </p>
-      <CyberButton variant="primary" size="sm" onclick={() => showCreateModal = true}>
+      <CyberButton variant="primary" size="sm" onclick={openCreateModal}>
         REGISTER NEW PROVIDER
       </CyberButton>
     </div>
@@ -196,6 +252,13 @@
               </span>
             </div>
 
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-[var(--text-muted)]">Status:</span>
+              <span class="font-code font-bold px-1.5 py-0.5 rounded uppercase text-[10px] {prov.is_active ? 'bg-[var(--status-success)]/20 text-[var(--status-success)]' : 'bg-[var(--text-muted)]/20 text-[var(--text-muted)]'}">
+                {prov.is_active ? 'ACTIVE' : 'INACTIVE'}
+              </span>
+            </div>
+
             <div class="pt-3 border-t border-[var(--border-color)]/40 flex items-center justify-between gap-2">
               <button
                 type="button"
@@ -207,14 +270,37 @@
                 <span>{syncLoading[prov.id] ? 'SYNCING...' : 'SYNC MODELS'}</span>
               </button>
 
-              <button
-                type="button"
-                onclick={() => handleDeleteProvider(prov.id, prov.name)}
-                class="p-1.5 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 rounded transition-colors cursor-pointer"
-                title="Delete provider"
-              >
-                <Trash2 class="w-4 h-4" />
-              </button>
+              <div class="flex items-center gap-1">
+                <button
+                  type="button"
+                  onclick={() => handleToggleProviderActive(prov)}
+                  class="p-2 rounded transition-colors cursor-pointer {prov.is_active ? 'text-[var(--status-success)] hover:bg-[var(--status-success)]/10' : 'text-[var(--text-muted)] hover:bg-[var(--bg-elevated)]'}"
+                  title={prov.is_active ? 'Deactivate provider' : 'Activate provider'}
+                  aria-label={prov.is_active ? 'Deactivate provider' : 'Activate provider'}
+                >
+                  <Power class="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onclick={() => openEditModal(prov)}
+                  class="p-2 text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 rounded transition-colors cursor-pointer"
+                  title="Edit provider"
+                  aria-label="Edit provider"
+                >
+                  <Pencil class="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onclick={() => handleDeleteProvider(prov.id, prov.name)}
+                  class="p-2 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 rounded transition-colors cursor-pointer"
+                  title="Delete provider"
+                  aria-label="Delete provider"
+                >
+                  <Trash2 class="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         </CyberCard>
@@ -296,12 +382,12 @@
       <div class="w-full max-w-lg border border-[var(--accent-primary)] bg-[var(--bg-surface)] p-6 chamfer shadow-[var(--border-glow)] space-y-4">
         <div class="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
           <div class="font-hud font-bold text-sm text-[var(--text-primary)]">
-            REGISTER NEW LLM GATEWAY
+            {editingProviderId ? 'EDIT LLM GATEWAY' : 'REGISTER NEW LLM GATEWAY'}
           </div>
           <button
             type="button"
             onclick={() => showCreateModal = false}
-            class="text-[var(--text-muted)] hover:text-white text-xs font-hud"
+            class="p-2 text-[var(--text-muted)] hover:text-white text-xs font-hud"
           >
             [CLOSE]
           </button>
@@ -313,7 +399,7 @@
           </div>
         {/if}
 
-        <form onsubmit={handleCreateProvider} class="space-y-4 text-xs font-code">
+        <form onsubmit={handleSaveProvider} class="space-y-4 text-xs font-code">
           <div>
             <label class="block text-[var(--text-muted)] mb-1">
               <span>Provider Label / Name</span>
@@ -367,13 +453,25 @@
               <input
                 type="password"
                 bind:value={formApiKey}
-                placeholder="sk-..."
+                oninput={() => (formApiKeyTouched = true)}
+                placeholder={editingProviderId ? '•••••••• (leave blank to keep current)' : 'sk-...'}
                 class="w-full mt-1 px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
               />
             </label>
             <span class="text-[10px] text-[var(--text-muted)] mt-1 block">
-              Leave blank if running local Ollama without auth.
+              {#if editingProviderId}
+                Leave blank to keep the existing encrypted key.
+              {:else}
+                Leave blank if running local Ollama without auth.
+              {/if}
             </span>
+          </div>
+
+          <div>
+            <label class="flex items-center gap-2 text-[var(--text-muted)] cursor-pointer select-none">
+              <input type="checkbox" bind:checked={formIsActive} class="accent-[var(--accent-primary)] w-4 h-4" />
+              <span>Provider active (available to agents)</span>
+            </label>
           </div>
 
           <div class="pt-3 border-t border-[var(--border-color)] flex justify-end gap-2">
@@ -381,7 +479,7 @@
               CANCEL
             </CyberButton>
             <CyberButton variant="primary" size="sm" type="submit" disabled={formSubmitting}>
-              {formSubmitting ? 'SAVING...' : 'ENCRYPT & SAVE'}
+              {formSubmitting ? 'SAVING...' : editingProviderId ? 'SAVE CHANGES' : 'ENCRYPT & SAVE'}
             </CyberButton>
           </div>
         </form>
