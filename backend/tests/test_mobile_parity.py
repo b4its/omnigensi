@@ -450,3 +450,171 @@ def test_mcp_manager_unregister_invalidates_cache():
 
     # Unregistering an unknown server is a no-op, not an error
     assert manager.unregister_server("cache-probe") is False
+
+
+# ---------------------------------------------------------------------------
+# Dashboard stats, execution filters and provider connection testing
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_stats_endpoint_aggregates_everything():
+    """The dashboard must not have to page collections to count them."""
+    async with _client() as client:
+        resp = await client.get("/api/v1/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        assert set(data) == {
+            "providers",
+            "providers_active",
+            "agents",
+            "workflows",
+            "executions",
+            "total_tokens",
+            "estimated_cost_usd",
+            "mcp_servers",
+            "mcp_servers_enabled",
+            "tools_available",
+            "generated_at",
+        }
+
+        # Counts must agree with the collection totals reported in headers.
+        for key, path in (
+            ("providers", "/api/v1/providers"),
+            ("agents", "/api/v1/agents"),
+            ("workflows", "/api/v1/workflows"),
+        ):
+            listing = await client.get(f"{path}?limit=1")
+            assert data[key] == int(listing.headers["x-total-count"]), key
+
+        breakdown = data["executions"]
+        assert breakdown["total"] >= 1
+        assert breakdown["total"] == (
+            breakdown["completed"]
+            + breakdown["failed"]
+            + breakdown["running"]
+            + breakdown["pending"]
+            + breakdown["waiting_approval"]
+            + breakdown["cancelled"]
+        )
+        assert data["tools_available"] >= 5
+        assert data["mcp_servers"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_stats_counts_active_providers():
+    async with _client() as client:
+        before = (await client.get("/api/v1/stats")).json()
+
+        created = await client.post(
+            "/api/v1/providers",
+            json={
+                "name": "stats-inactive-probe",
+                "provider_type": "custom",
+                "base_url": "http://localhost:9999",
+                "api_key": "",
+                "is_active": False,
+            },
+        )
+        provider_id = created.json()["id"]
+        try:
+            after = (await client.get("/api/v1/stats")).json()
+            assert after["providers"] == before["providers"] + 1
+            assert after["providers_active"] == before["providers_active"]
+        finally:
+            await client.delete(f"/api/v1/providers/{provider_id}")
+
+
+@pytest.mark.asyncio
+async def test_execution_filters_by_status_and_workflow():
+    async with _client() as client:
+        all_resp = await client.get("/api/v1/executions?limit=1")
+        total_all = int(all_resp.headers["x-total-count"])
+
+        completed = await client.get("/api/v1/executions?status=completed&limit=1")
+        cancelled = await client.get("/api/v1/executions?status=cancelled&limit=1")
+        assert completed.status_code == 200
+        assert cancelled.status_code == 200
+
+        total_completed = int(completed.headers["x-total-count"])
+        total_cancelled = int(cancelled.headers["x-total-count"])
+        # Filters must narrow the total, never inflate it.
+        assert total_completed <= total_all
+        assert total_cancelled <= total_all
+
+        # Returned rows must actually match the filter.
+        for row in (await client.get("/api/v1/executions?status=completed&limit=5")).json():
+            assert row["status"] == "completed"
+
+        wf = (await client.get("/api/v1/workflows")).json()[0]
+        by_workflow = await client.get(
+            f"/api/v1/executions?workflow_id={wf['id']}&limit=5"
+        )
+        assert by_workflow.status_code == 200
+        for row in by_workflow.json():
+            assert row["workflow_id"] == wf["id"]
+
+
+@pytest.mark.asyncio
+async def test_execution_filter_rejects_bad_workflow_id():
+    async with _client() as client:
+        resp = await client.get("/api/v1/executions?workflow_id=not-a-uuid")
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_provider_test_reports_failure_instead_of_faking_success():
+    """GET /models falls back to canned data; /test must tell the truth."""
+    async with _client() as client:
+        created = await client.post(
+            "/api/v1/providers",
+            json={
+                "name": "unreachable-probe",
+                "provider_type": "custom",
+                "base_url": "http://127.0.0.1:9",
+                "api_key": "sk-invalid",
+                "is_active": True,
+            },
+        )
+        provider_id = created.json()["id"]
+        try:
+            # /models lies: always 200 with fallback entries
+            models = await client.get(f"/api/v1/providers/{provider_id}/models")
+            assert models.status_code == 200
+            assert len(models.json()) > 0
+
+            # /test tells the truth
+            tested = await client.post(f"/api/v1/providers/{provider_id}/test")
+            assert tested.status_code == 200
+            body = tested.json()
+            assert body["ok"] is False
+            assert body["error"]
+            assert body["model_count"] == 0
+        finally:
+            await client.delete(f"/api/v1/providers/{provider_id}")
+
+
+@pytest.mark.asyncio
+async def test_provider_test_unknown_provider_404():
+    async with _client() as client:
+        resp = await client.post(
+            "/api/v1/providers/00000000-0000-0000-0000-000000000000/test"
+        )
+        assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cors_exposes_pagination_headers():
+    """WebView clients cannot read X-Total-Count unless CORS exposes it."""
+    async with _client() as client:
+        # expose-headers is only sent on the actual (non-preflight) response.
+        resp = await client.get(
+            "/api/v1/agents?limit=1",
+            headers={"Origin": "http://192.168.1.10:5296"},
+        )
+        assert resp.status_code == 200
+        assert resp.headers["access-control-allow-origin"] == "http://192.168.1.10:5296"
+        exposed = resp.headers.get("access-control-expose-headers", "").lower()
+        for header in ("x-total-count", "x-limit", "x-offset", "x-request-id"):
+            assert header in exposed, header
