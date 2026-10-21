@@ -70,6 +70,46 @@ class MCPBridgeManager:
         self._servers[config.name] = config
         logger.info(f"Registered MCP server: {config.name} ({config.server_type})")
 
+    def has_server(self, name: str) -> bool:
+        return name in self._servers
+
+    def update_server(self, name: str, config: MCPServerConfig) -> MCPServerConfig:
+        """Replaces the configuration of an existing server.
+
+        Discovered tools and cached LangChain wrappers are dropped because the
+        transport may have changed (e.g. stdio -> sse).
+        """
+        self._invalidate(name)
+        self._servers[name] = config
+        logger.info(f"Updated MCP server: {name} ({config.server_type})")
+        return config
+
+    def unregister_server(self, name: str) -> bool:
+        """Removes a server and every cached artifact derived from it."""
+        if name not in self._servers:
+            return False
+        self._invalidate(name)
+        del self._servers[name]
+        logger.info(f"Unregistered MCP server: {name}")
+        return True
+
+    def set_enabled(self, name: str, enabled: bool) -> MCPServerConfig:
+        """Enables/disables a server without deleting its configuration."""
+        config = self._servers[name]
+        updated = config.model_copy(update={"enabled": enabled})
+        self._servers[name] = updated
+        if not enabled:
+            self._invalidate(name)
+        logger.info(f"{'Enabled' if enabled else 'Disabled'} MCP server: {name}")
+        return updated
+
+    def _invalidate(self, name: str) -> None:
+        """Drops cached tools discovered from ``name``."""
+        self._tools_cache.pop(name, None)
+        prefix = f"{name}:"
+        for tool_name in [t for t in self._langchain_tools if t.startswith(prefix)]:
+            self._langchain_tools.pop(tool_name, None)
+
     def list_servers(self) -> List[MCPServerConfig]:
         return list(self._servers.values())
 
@@ -84,6 +124,8 @@ class MCPBridgeManager:
         config = self._servers.get(server_name)
         if not config:
             raise ValueError(f"MCP server '{server_name}' not registered")
+        if not config.enabled:
+            raise ValueError(f"MCP server '{server_name}' is disabled")
 
         if not MCP_AVAILABLE:
             logger.warning("MCP SDK not installed, using fallback tool definitions")
@@ -219,6 +261,8 @@ class MCPBridgeManager:
         config = self._servers.get(server_name)
         if not config:
             raise ValueError(f"MCP server '{server_name}' not found")
+        if not config.enabled:
+            raise ValueError(f"MCP server '{server_name}' is disabled")
 
         # Try live execution if SDK is available
         if MCP_AVAILABLE and config.server_type == "stdio" and config.command:
