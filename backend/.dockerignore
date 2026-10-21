@@ -1,0 +1,28 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local environment (compose injects env vars)
+.env
+.env.*
+
+# Scratch/test scripts at repo root (tests/ dir IS included so `make test` works)
+/test_*.py
+
+# Generated workspace artifacts
+workspace/
+*.pdf
+*.docx
+
+# Tooling / VCS
+.git/
+.gitignore
+*.md
