@@ -169,6 +169,13 @@ async def client_config(request: Request) -> ClientConfigResponse:
             "provider_test": True,
             "execution_filters": True,
             "stream_resume": True,
+            "workflow_validation": True,
+            "execution_retry": True,
+            "execution_delete": True,
+            "agent_test": True,
+            "agent_duplicate": True,
+            "workflow_duplicate": True,
+            "tool_execution": True,
         },
         limits={"executions_page_size": 50, "max_page_size": 200},
     )

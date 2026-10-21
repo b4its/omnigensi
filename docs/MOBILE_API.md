@@ -318,6 +318,102 @@ flat, with the status at the root:
 
 ---
 
+## 5b. Workflows: validation and cloning
+
+Saving a graph now **rejects** one that cannot run, so an editor should
+validate first and render the issues inline.
+
+```
+POST /api/v1/workflows/validate          # dry-run an unsaved graph
+GET  /api/v1/workflows/{id}/validate     # re-check a saved graph
+```
+
+```json
+{
+  "valid": false,
+  "summary": "Node 'a' is missing 'agent_id' (+1 more issue(s))",
+  "node_count": 1, "edge_count": 1, "entry_point": "a",
+  "issues": [
+    { "code": "missing_agent_id", "message": "Node 'a' is missing 'agent_id'",
+      "node_id": "a", "field": "agent_id", "edge_index": null },
+    { "code": "unknown_edge_target", "message": "Edge #0 points to unknown node 'zzz'",
+      "node_id": null, "field": "to", "edge_index": 0 }
+  ]
+}
+```
+
+Issue codes: `invalid_schema`, `missing_nodes`, `empty_graph`,
+`invalid_edges`, `invalid_node`, `missing_node_id`, `duplicate_node_id`,
+`missing_agent_id`, `invalid_agent_id`, `unknown_agent`,
+`invalid_node_type`, `invalid_edge`, `invalid_edge_source`,
+`missing_edge_source`, `invalid_edge_type`, `unknown_edge_target`,
+`unknown_entry_point`.
+
+`POST /workflows` and `PUT /workflows/{id}` return `400 bad_request` with the
+same summary when the graph is invalid.
+
+```
+POST /api/v1/workflows/{id}/duplicate    -> 201, name defaults to "<name> (copy)"
+GET  /api/v1/workflows?q=<text>          -> search by name (X-Total-Count aware)
+```
+
+---
+
+## 5c. Agents: testing and cloning
+
+```
+POST /api/v1/agents/{id}/test
+{ "prompt": "Describe your role", "max_tokens": 256 }
+```
+
+```json
+{ "ok": true, "agent_id": "…", "agent_name": "CHRONOS-05",
+  "model_name": "openai/gpt-4o", "provider_name": "Omnirouter",
+  "response_text": "I coordinate…", "latency_ms": 812,
+  "prompt_tokens": 120, "completion_tokens": 40, "error": null }
+```
+
+The agent runs with its own role/goal/backstory as the system prompt, its
+configured model and temperature. A provider failure returns `ok: false`
+with `error` instead of a fake reply.
+
+```
+POST /api/v1/agents/{id}/duplicate       -> 201, name defaults to "<name> (copy)"
+```
+
+---
+
+## 5d. Tools: metadata and standalone execution
+
+```
+GET /api/v1/tools
+```
+
+Each entry is typed and includes the argument names a client needs to build
+a form:
+
+```json
+{ "id": "create_markdown_document", "name": "Markdown Generator (.md)",
+  "description": "…", "icon": "file-text", "category": "document",
+  "extension": ".md", "requires_write": true,
+  "parameters": ["filename", "content"] }
+```
+
+```
+POST /api/v1/tools/{tool_id}/execute
+{ "arguments": { "filename": "probe.md", "content": "# hi" } }
+```
+
+```json
+{ "ok": true, "tool_id": "create_markdown_document",
+  "result": { "status": "success", "filename": "probe.md", "size_bytes": 4, … } }
+```
+
+Unknown arguments return `400` (with the accepted list), an unknown tool
+`404`. Files written this way are fetchable from `GET /files/{path}`.
+
+---
+
 ## 6. Executions and live telemetry
 
 ### Dispatch
@@ -410,6 +506,19 @@ Cancelling an already-finished run is not an error; it returns
 
 ---
 
+### Retry and delete
+
+```
+POST   /api/v1/executions/{id}/retry     -> 202 with the NEW execution record
+DELETE /api/v1/executions/{id}           -> 204
+```
+
+Retry re-dispatches the same workflow and prompt as a *new* record, leaving
+history intact. Both endpoints return `409 conflict` while a run is
+`running`, `pending` or `waiting_approval` - cancel first.
+
+---
+
 ## 7. Downloading generated artifacts
 
 `generated_files` entries and `device_file_write` events carry both `filename`
@@ -452,5 +561,10 @@ instead of writing to the device filesystem.
 | Auto-add models + pick default | ✅ | `POST /models/sync`, `PUT /default-model` | ✅ |
 | Test a real model response | ✅ | `POST /chat-test` | ✅ |
 | SSE resume via Last-Event-ID | ✅ | ✅ | ✅ (implement backoff) |
+| Graph validation before save | ✅ | `POST /workflows/validate` | ✅ |
+| Workflow / agent duplication | ✅ | `POST …/duplicate` | ✅ |
+| Agent response testing | ✅ | `POST /agents/{id}/test` | ✅ |
+| Standalone tool execution | ✅ | `POST /tools/{id}/execute` | ✅ |
+| Execution retry / delete | ✅ | `POST …/retry`, `DELETE …` | ✅ |
 | Uniform errors | ✅ | ✅ | ✅ |
 | Auth / multi-tenant | ❌ | ❌ | not implemented |
