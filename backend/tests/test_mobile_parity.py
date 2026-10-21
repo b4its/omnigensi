@@ -584,10 +584,11 @@ async def test_provider_test_reports_failure_instead_of_faking_success():
         )
         provider_id = created.json()["id"]
         try:
-            # /models lies: always 200 with fallback entries
+            # /models stays 200 but must not invent models: with nothing
+            # stored and an unreachable host the list is empty.
             models = await client.get(f"/api/v1/providers/{provider_id}/models")
             assert models.status_code == 200
-            assert len(models.json()) > 0
+            assert models.json() == []
 
             # /test tells the truth
             tested = await client.post(f"/api/v1/providers/{provider_id}/test")

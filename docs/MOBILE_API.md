@@ -204,6 +204,79 @@ POST /api/v1/providers/{id}/test
 "Authentication failed" message. A successful probe returns `ok: true` and the
 discovered model count.
 
+### Provider models and response testing
+
+Three distinct operations, increasingly expensive:
+
+| Goal | Endpoint | Cost |
+|---|---|---|
+| List models (no persistence) | `GET /providers/{id}/models` | one HTTP GET |
+| Auto-add / store models | `POST /providers/{id}/models/sync` | one HTTP GET |
+| Prove a model answers | `POST /providers/{id}/chat-test` | a few tokens |
+
+`GET /providers/{id}/models` returns live models when the provider is
+reachable and the last stored set otherwise. It never invents models, so an
+empty array means "nothing known about this provider".
+
+#### Auto-add models
+
+```
+POST /providers/{id}/models/sync
+```
+
+```json
+{ "ok": true, "provider_id": "…", "discovered": 468, "added": 468,
+  "updated": 0, "marked_unavailable": 0, "total_stored": 468,
+  "checked_url": "https://openrouter.ai/api/v1/models", "latency_ms": 2456,
+  "error": null }
+```
+
+- Idempotent: calling it twice reports `added: 0, updated: N`.
+- Models that disappear are flagged `is_available: false`, never deleted, so
+  an agent referencing one keeps working.
+- The first successful sync auto-selects a default if none exists.
+- On failure it returns `ok: false` with `error` and changes nothing.
+
+#### Inspect and select
+
+```
+GET  /providers/{id}/model-registry      -> stored models (no live call)
+PUT  /providers/{id}/default-model       -> {"model_id": "openai/gpt-4o-mini"}
+```
+
+Selecting a model not in the registry returns `404 not_found` - run a sync
+first. `ProviderResponse.default_model` always reflects the selection.
+
+#### Test a real response
+
+```
+POST /providers/{id}/chat-test
+{ "model_id": "openai/gpt-4o-mini", "prompt": "Reply with OK", "max_tokens": 64 }
+```
+
+```json
+{ "ok": true, "model_id": "openai/gpt-4o-mini", "response_text": "OK",
+  "latency_ms": 812, "status_code": 200, "prompt_tokens": 9,
+  "completion_tokens": 1, "checked_url": "…/chat/completions", "error": null }
+```
+
+`model_id` may be omitted to use the provider default; with no default and no
+explicit model the endpoint returns `400`. A bad key yields
+`ok: false` with an "Authentication failed" message rather than a fake success.
+
+#### Probing before saving (registration wizard)
+
+The web UI lets an operator validate credentials **before** the provider
+exists, using the same code paths without persisting anything:
+
+```
+POST /providers/discover-draft     { base_url, api_key, provider_type }
+POST /providers/chat-test-draft    { base_url, api_key, provider_type, model_id, prompt }
+```
+
+To register and discover in one step, send
+`POST /providers?auto_sync_models=true`.
+
 ### MCP server management
 
 MCP servers are added, edited, enabled/disabled and removed at runtime. All
@@ -376,6 +449,8 @@ instead of writing to the device filesystem.
 | Pagination (+filters on executions) | ✅ | ✅ | ✅ |
 | Dashboard aggregate stats | ✅ | `GET /stats` | ✅ |
 | Provider connection test | ✅ | `POST /providers/{id}/test` | ✅ |
+| Auto-add models + pick default | ✅ | `POST /models/sync`, `PUT /default-model` | ✅ |
+| Test a real model response | ✅ | `POST /chat-test` | ✅ |
 | SSE resume via Last-Event-ID | ✅ | ✅ | ✅ (implement backoff) |
 | Uniform errors | ✅ | ✅ | ✅ |
 | Auth / multi-tenant | ❌ | ❌ | not implemented |

@@ -40,11 +40,11 @@ async def test_providers_and_agents_endpoints():
         assert len(providers) >= 1
         p_id = providers[0]["id"]
 
-        # Models
+        # Models: always 200, containing live models or the stored registry.
+        # It must never invent models for an unreachable provider.
         resp_models = await client.get(f"/api/v1/providers/{p_id}/models")
         assert resp_models.status_code == 200
-        models = resp_models.json()
-        assert len(models) > 0
+        assert isinstance(resp_models.json(), list)
 
         # Agents
         resp_agents = await client.get("/api/v1/agents")
