@@ -14,6 +14,7 @@ from app.api.v1.workflows import router as workflows_router
 from app.schemas.execution import ExecutionResponse
 from app.api.v1.executions import router as executions_router, trigger_workflow_execution
 from app.api.v1.tools import router as tools_router
+from app.api.v1.mcp import router as mcp_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,6 +57,7 @@ app.include_router(agents_router, prefix=settings.API_V1_STR)
 app.include_router(workflows_router, prefix=settings.API_V1_STR)
 app.include_router(executions_router, prefix=settings.API_V1_STR)
 app.include_router(tools_router, prefix=settings.API_V1_STR)
+app.include_router(mcp_router, prefix=settings.API_V1_STR)
 
 # Also mount /api/v1/workflows/{id}/execute directly matching PRD table
 app.add_api_route(

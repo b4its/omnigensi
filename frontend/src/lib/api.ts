@@ -67,6 +67,11 @@ export const api = {
       body: JSON.stringify({ tool_call_id: toolCallId, approved, notes }),
     }),
 
+  // MCP
+  getMCPServers: () => apiFetch<any[]>('/api/v1/mcp/servers'),
+  registerMCPServer: (data: any) => apiFetch<any>('/api/v1/mcp/servers', { method: 'POST', body: JSON.stringify(data) }),
+  getMCPServerTools: (serverName: string) => apiFetch<any>(`/api/v1/mcp/servers/${serverName}/tools`),
+
   // Health
   checkHealth: () => apiFetch<any>('/health'),
 };
