@@ -36,6 +36,31 @@ export { API_BASE };
 export interface RequestOptions extends RequestInit {
 	/** Query string parameters appended to the endpoint. */
 	params?: Record<string, string | number | boolean | undefined | null>;
+	/** Per-request timeout in milliseconds (default 20s). */
+	timeoutMs?: number;
+	/** Number of retries for transient failures (default 1). */
+	retries?: number;
+}
+
+/** Error carrying the backend's machine-readable code and HTTP status. */
+export class ApiError extends Error {
+	code?: string;
+	status?: number;
+	retryable: boolean;
+
+	constructor(message: string, status?: number, code?: string) {
+		super(message);
+		this.name = 'ApiError';
+		this.status = status;
+		this.code = code;
+		this.retryable = status === undefined || status >= 500 || status === 429;
+	}
+}
+
+const DEFAULT_TIMEOUT_MS = 20_000;
+
+function isAbortError(err: unknown): boolean {
+	return err instanceof DOMException && err.name === 'AbortError';
 }
 
 function buildUrl(endpoint: string, params?: RequestOptions['params']): string {
@@ -52,45 +77,96 @@ function buildUrl(endpoint: string, params?: RequestOptions['params']): string {
 }
 
 export async function apiFetch<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
-	const { params, headers: extraHeaders, ...rest } = options;
+	const { params, headers: extraHeaders, timeoutMs, retries, ...rest } = options;
 	const url = buildUrl(endpoint, params);
 	const headers = {
 		'Content-Type': 'application/json',
-		...(extraHeaders || {}),
+		...(extraHeaders || {})
 	};
 
-	const res = await fetch(url, { ...rest, headers });
-	if (!res.ok) {
-		let errorMsg = `API Request failed with status ${res.status}`;
-		try {
-			const errJson = await res.json();
-			// The backend now normalises every error to `detail: string`, but
-			// keep tolerating the legacy shape for older deployments.
-			if (errJson.detail) {
-				errorMsg =
-					typeof errJson.detail === 'string'
-						? errJson.detail
-						: JSON.stringify(errJson.detail);
-			}
-			const err = new Error(errorMsg) as Error & { code?: string; status?: number };
-			err.code = errJson.code;
-			err.status = res.status;
-			throw err;
-		} catch (parsed) {
-			if (parsed instanceof Error) throw parsed;
+	const maxAttempts = (retries ?? 1) + 1;
+	let lastError: unknown;
+
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		// A hung request on a flaky mobile network would otherwise block the
+		// caller forever and leave the UI stuck in a loading state.
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), timeoutMs ?? DEFAULT_TIMEOUT_MS);
+		// Chain an externally provided signal so callers can still cancel.
+		if (rest.signal) {
+			const external = rest.signal;
+			if (external.aborted) controller.abort();
+			else external.addEventListener('abort', () => controller.abort(), { once: true });
 		}
-		throw new Error(errorMsg);
+
+		try {
+			const res = await fetch(url, { ...rest, headers, signal: controller.signal });
+
+			if (!res.ok) {
+				let errorMsg = `API Request failed with status ${res.status}`;
+				let code: string | undefined;
+				try {
+					const errJson = await res.json();
+					// The backend normalises every error to `detail: string`, but
+					// tolerate the legacy shape for older deployments.
+					if (errJson.detail) {
+						errorMsg =
+							typeof errJson.detail === 'string'
+								? errJson.detail
+								: JSON.stringify(errJson.detail);
+					}
+					code = errJson.code;
+				} catch {
+					/* non-JSON body */
+				}
+				throw new ApiError(errorMsg, res.status, code);
+			}
+			if (res.status === 204) {
+				return {} as T;
+			}
+			return (await res.json()) as T;
+		} catch (err) {
+			lastError = isAbortError(err)
+				? new ApiError('Request timed out - check the backend connection')
+				: err;
+			const retryable = lastError instanceof ApiError ? lastError.retryable : true;
+			if (attempt >= maxAttempts || !retryable) break;
+			// Linear backoff: 400ms, 800ms, ...
+			await new Promise((r) => setTimeout(r, 400 * attempt));
+		} finally {
+			clearTimeout(timer);
+		}
 	}
-	if (res.status === 204) {
-		return {} as T;
-	}
-	return res.json();
+
+	throw lastError instanceof Error ? lastError : new ApiError('Network request failed');
 }
 
 /** Pagination window matching the backend `limit`/`offset` query params. */
 export interface PageParams {
 	limit?: number;
 	offset?: number;
+}
+
+export interface SystemStats {
+	providers: number;
+	providers_active: number;
+	agents: number;
+	workflows: number;
+	executions: {
+		total: number;
+		completed: number;
+		failed: number;
+		running: number;
+		pending: number;
+		waiting_approval: number;
+		cancelled: number;
+	};
+	total_tokens: number;
+	estimated_cost_usd: number;
+	mcp_servers: number;
+	mcp_servers_enabled: number;
+	tools_available: number;
+	generated_at: string;
 }
 
 export interface ClientConfig {
@@ -115,8 +191,12 @@ export interface ClientConfig {
 export const api = {
 	// System
 	getClientConfig: () => apiFetch<ClientConfig>('/api/v1/config'),
+	getStats: () => apiFetch<SystemStats>('/api/v1/stats'),
 	checkHealth: () =>
-		apiFetch<{ status: string; service: string; version: string }>('/api/v1/health'),
+		apiFetch<{ status: string; service: string; version: string }>('/api/v1/health', {
+			retries: 0,
+			timeoutMs: 5000
+		}),
 
 	// Providers
 	getProviders: (page?: PageParams) =>
@@ -129,6 +209,15 @@ export const api = {
 	deleteProvider: (id: string) =>
 		apiFetch<void>(`/api/v1/providers/${id}`, { method: 'DELETE' }),
 	getProviderModels: (id: string) => apiFetch<any[]>(`/api/v1/providers/${id}/models`),
+	testProvider: (id: string) =>
+		apiFetch<{
+			ok: boolean;
+			status_code?: number | null;
+			checked_url?: string | null;
+			model_count: number;
+			latency_ms: number;
+			error?: string | null;
+		}>(`/api/v1/providers/${id}/test`, { method: 'POST', timeoutMs: 15_000 }),
 
 	// Agents
 	getAgents: (page?: PageParams) =>
@@ -160,8 +249,10 @@ export const api = {
 		}),
 
 	// Executions
-	getExecutions: (page?: PageParams) =>
-		apiFetch<any[]>('/api/v1/executions', { params: page as Record<string, number> }),
+	getExecutions: (page?: PageParams & { status?: string; workflow_id?: string }) =>
+		apiFetch<any[]>('/api/v1/executions', {
+			params: page as Record<string, string | number>
+		}),
 	getExecution: (id: string) => apiFetch<any>(`/api/v1/executions/${id}`),
 	getExecutionStreamUrl: (id: string) => `${API_BASE}/api/v1/executions/${id}/stream`,
 	approveTool: (id: string, toolCallId: string, approved: boolean, notes?: string) =>
