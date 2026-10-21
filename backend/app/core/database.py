@@ -13,6 +13,7 @@ engine = create_async_engine(
     future=True,
     pool_pre_ping=True,
 )
+async_engine = engine
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

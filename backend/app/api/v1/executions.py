@@ -231,12 +231,32 @@ async def stream_execution_telemetry(execution_id: uuid.UUID) -> StreamingRespon
         # Initial ping to establish connection immediately
         yield f"event: connected\ndata: {json.dumps({'execution_id': str(execution_id), 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
 
+        # Check if execution already completed before SSE connected
+        async with AsyncSessionLocal() as db_check:
+            exec_obj = await db_check.get(WorkflowExecution, execution_id)
+            if exec_obj and exec_obj.status in ("completed", "failed"):
+                evt_type = "workflow_complete" if exec_obj.status == "completed" else "workflow_failed"
+                payload = {
+                    "status": exec_obj.status,
+                    "final_output": exec_obj.final_output,
+                    "generated_files": exec_obj.generated_files or [],
+                    "total_tokens": exec_obj.total_tokens or 0,
+                    "estimated_cost_usd": float(exec_obj.estimated_cost_usd or 0),
+                }
+                yield f"event: {evt_type}\ndata: {json.dumps(payload)}\n\n"
+                await pubsub.unsubscribe(channel_name)
+                await pubsub.aclose()
+                await r.aclose()
+                return
+
+        idle_ticks = 0
         try:
             while True:
                 msg = await pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=1.0
+                    ignore_subscribe_messages=True, timeout=0.5
                 )
                 if msg is not None:
+                    idle_ticks = 0
                     raw_data = msg.get("data")
                     if isinstance(raw_data, str):
                         try:
@@ -250,9 +270,25 @@ async def stream_execution_telemetry(execution_id: uuid.UUID) -> StreamingRespon
                         except Exception:
                             yield f"event: message\ndata: {raw_data}\n\n"
                 else:
+                    idle_ticks += 1
                     # Keep-alive heartbeat comment
                     yield ": ping\n\n"
-                    await asyncio.sleep(0.5)
+                    # Periodically check DB in case of race condition
+                    if idle_ticks % 4 == 0:
+                        async with AsyncSessionLocal() as db_check:
+                            exec_obj = await db_check.get(WorkflowExecution, execution_id)
+                            if exec_obj and exec_obj.status in ("completed", "failed"):
+                                evt_type = "workflow_complete" if exec_obj.status == "completed" else "workflow_failed"
+                                payload = {
+                                    "status": exec_obj.status,
+                                    "final_output": exec_obj.final_output,
+                                    "generated_files": exec_obj.generated_files or [],
+                                    "total_tokens": exec_obj.total_tokens or 0,
+                                    "estimated_cost_usd": float(exec_obj.estimated_cost_usd or 0),
+                                }
+                                yield f"event: {evt_type}\ndata: {json.dumps(payload)}\n\n"
+                                break
+                    await asyncio.sleep(0.3)
         except asyncio.CancelledError:
             pass
         finally:
