@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.auth import is_public_path, token_from_request, verify_token
 from app.core.config import settings
@@ -68,33 +69,12 @@ app = FastAPI(
 
 install_error_handlers(app)
 
-# CORS Middleware - driven by configuration so the same backend serves the web
-# UI (browser) and a mobile app / mobile WebView on the LAN.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_origin_regex=settings.CORS_ORIGIN_REGEX or None,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    # Pagination metadata lives in headers, so CORS clients (browser and
-    # mobile WebViews) must be explicitly allowed to read them.
-    expose_headers=[
-        "X-Request-ID",
-        "Content-Disposition",
-        "X-Total-Count",
-        "X-Limit",
-        "X-Offset",
-    ],
-    max_age=600,
-)
 
 # Authentication gate.
 #
 # One shared password protects the whole instance. Health, the client config,
 # the docs and the auth endpoints themselves stay public so a client can
 # discover the API and sign in.
-@app.middleware("http")
 async def require_session(request: Request, call_next):
     if not settings.AUTH_ENABLED or is_public_path(request.url.path):
         return await call_next(request)
@@ -116,6 +96,33 @@ async def require_session(request: Request, call_next):
         )
     return await call_next(request)
 
+
+# Added BEFORE CORS because Starlette makes the last added middleware
+# outermost: CORS must wrap this one, otherwise a 401 would reach the browser
+# without Access-Control-Allow-Origin and surface as an opaque CORS failure
+# instead of the 401 the client needs to act on.
+app.add_middleware(BaseHTTPMiddleware, dispatch=require_session)
+
+# CORS Middleware - driven by configuration so the same backend serves the web
+# UI (browser) and a mobile app / mobile WebView on the LAN.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX or None,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    # Pagination metadata lives in headers, so CORS clients (browser and
+    # mobile WebViews) must be explicitly allowed to read them.
+    expose_headers=[
+        "X-Request-ID",
+        "Content-Disposition",
+        "X-Total-Count",
+        "X-Limit",
+        "X-Offset",
+    ],
+    max_age=600,
+)
 
 # Register API v1 Routers
 app.include_router(auth_router, prefix=settings.API_V1_STR)
@@ -209,6 +216,14 @@ async def client_config(request: Request) -> ClientConfigResponse:
             "tool_execution": True,
         },
         limits={"executions_page_size": 50, "max_page_size": 200},
+        auth={
+            "enabled": settings.AUTH_ENABLED,
+            "scheme": "single-password",
+            "login_path": f"{settings.API_V1_STR}/auth/login",
+            "session_path": f"{settings.API_V1_STR}/auth/session",
+            "transports": ["cookie", "bearer", "query"],
+            "token_ttl_seconds": settings.AUTH_TOKEN_TTL_SECONDS,
+        },
     )
 
 

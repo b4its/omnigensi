@@ -8,6 +8,69 @@ Everything below is versioned under `/api/v1` unless stated otherwise.
 
 ---
 
+## 0. Authentication
+
+The whole instance is guarded by **one shared operator password**
+(`APP_PASSWORD`, default `123`). There are no users or roles.
+
+### Endpoints
+
+| Request | Purpose |
+|---|---|
+| `POST /api/v1/auth/login` `{"password": "..."}` | `200` + token, `401` on a wrong password |
+| `POST /api/v1/auth/logout` | Clears the session cookie |
+| `GET  /api/v1/auth/session` | Reports `{authenticated, auth_enabled}` (public) |
+
+```json
+// POST /api/v1/auth/login
+{ "authenticated": true, "auth_enabled": true,
+  "token": "<signed token>", "expires_at": 1790000000 }
+```
+
+### Sending the credential
+
+The login response sets an **httpOnly, SameSite=Lax cookie** *and* returns the
+token in the body. Pick whichever your platform supports:
+
+| Client | How to authenticate |
+|---|---|
+| Browser / WebView | The cookie is enough; send `credentials: 'include'` |
+| Native mobile app | `Authorization: Bearer <token>` on every request |
+| SSE stream (`EventSource`) | `?token=<token>` — EventSource cannot set headers |
+| File download via `<a href>` | `?token=<token>` for the same reason |
+
+```
+GET /api/v1/executions/{id}/stream?token=<token>
+GET /api/v1/files/report.pdf?token=<token>
+```
+
+Token precedence is Bearer → query → cookie.
+
+### Behaviour to implement
+
+- Tokens are signed and expire after `AUTH_TOKEN_TTL_SECONDS` (default 7 days).
+  Store the token and reuse it until a request returns `401`.
+- On `401` (`code: "unauthorized"`) clear the stored token and show the login
+  screen again. The web UI does this centrally.
+- Every authenticated request may be rejected at any time (expiry, secret
+  rotation), so always handle 401 rather than assuming a session is permanent.
+- `GET /auth/session` is the cheapest way to decide whether to show a login
+  prompt at startup.
+
+### What stays public
+
+`/health`, `/api/v1/health`, `/api/v1/config`, the three auth endpoints,
+`/docs`, `/redoc` and `/openapi.json`. Everything else returns `401` with the
+standard error envelope:
+
+```json
+{ "success": false, "detail": "Authentication required", "code": "unauthorized" }
+```
+
+`AUTH_ENABLED=false` disables the gate entirely (local experiments only).
+
+---
+
 ## 1. Bootstrapping a client
 
 Call this **once at startup** before anything else:
@@ -567,4 +630,5 @@ instead of writing to the device filesystem.
 | Standalone tool execution | ✅ | `POST /tools/{id}/execute` | ✅ |
 | Execution retry / delete | ✅ | `POST …/retry`, `DELETE …` | ✅ |
 | Uniform errors | ✅ | ✅ | ✅ |
-| Auth / multi-tenant | ❌ | ❌ | not implemented |
+| Single-password auth | ✅ | ✅ | ✅ (bearer or `?token=`) |
+| Multi-user / roles | ❌ | ❌ | not implemented |

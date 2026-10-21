@@ -42,6 +42,9 @@ class ClientConfigResponse(BaseModel):
     )
     features: Dict[str, bool]
     limits: Dict[str, int]
+    auth: Dict[str, Any] = Field(
+        description="Authentication requirements: enabled flag and supported transports"
+    )
 
 
 class ErrorDetail(BaseModel):

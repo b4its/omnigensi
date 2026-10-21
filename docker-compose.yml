@@ -52,6 +52,11 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-eGZqX2tFMUdBQ2dMcm1xek1tV2M0X2V2WVBNT2pUZnU4Wms9}
       WORKSPACE_ROOT: /app/workspace
       CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-5296},http://localhost:3123,http://127.0.0.1:${FRONTEND_PORT:-5296}
+      APP_PASSWORD: ${APP_PASSWORD:-123}
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-}
+      AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:-604800}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
     volumes:
       - omnigensi_workspace:/app/workspace
       # Live-reload source mount (development only)

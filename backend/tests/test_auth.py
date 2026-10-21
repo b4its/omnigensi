@@ -270,3 +270,53 @@ def test_token_from_request_precedence():
         )
         == "c"
     )
+
+
+@pytest.mark.asyncio
+async def test_unauthenticated_response_still_carries_cors_headers():
+    """A 401 must be readable by the browser, or it looks like a CORS failure.
+
+    Starlette builds the middleware stack in reverse (last added is
+    outermost), so the auth gate must sit inside CORSMiddleware.
+    """
+    async with _anon_client() as client:
+        resp = await client.get(
+            "/api/v1/agents", headers={"Origin": "http://localhost:5296"}
+        )
+        assert resp.status_code == 401
+        assert (
+            resp.headers.get("access-control-allow-origin") == "http://localhost:5296"
+        )
+        assert resp.json()["code"] == "unauthorized"
+
+
+def test_auth_middleware_is_inside_cors():
+    """Guards the ordering fix against a future refactor."""
+    from app.main import app
+
+    names = [m.cls.__name__ for m in app.user_middleware]
+    assert "CORSMiddleware" in names
+    assert names.index("CORSMiddleware") < names.index("BaseHTTPMiddleware")
+
+
+@pytest.mark.asyncio
+async def test_public_paths_also_carry_cors_headers():
+    async with _anon_client() as client:
+        for path in ("/api/v1/health", "/api/v1/config", "/api/v1/auth/session"):
+            resp = await client.get(path, headers={"Origin": "http://localhost:5296"})
+            assert resp.status_code == 200, path
+            assert resp.headers.get("access-control-allow-origin"), path
+
+
+@pytest.mark.asyncio
+async def test_client_config_advertises_auth_requirements():
+    """A mobile client must discover how to authenticate before calling."""
+    async with _anon_client() as client:
+        resp = await client.get("/api/v1/config")
+        assert resp.status_code == 200
+        auth_info = resp.json()["auth"]
+        assert auth_info["enabled"] is True
+        assert auth_info["scheme"] == "single-password"
+        assert auth_info["login_path"] == "/api/v1/auth/login"
+        assert set(auth_info["transports"]) == {"cookie", "bearer", "query"}
+        assert auth_info["token_ttl_seconds"] > 0

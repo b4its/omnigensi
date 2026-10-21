@@ -30,6 +30,9 @@ make status    # container health
 
 | Service | URL |
 |---|---|
+> The UI asks for a password. The default is `123` (set `APP_PASSWORD` to
+> change it).
+
 | Web UI | http://localhost:5296 |
 | API | http://localhost:8123 |
 | API docs | http://localhost:8123/docs |
@@ -60,6 +63,10 @@ Copy `.env.example` to `.env`. Notable variables:
 | `CORS_ORIGIN_REGEX` | LAN ranges | Allows phones/tablets on the same network |
 | `PUBLIC_BASE_URL` | auto-detected | Absolute base URL reported by `/api/v1/config` |
 | `PUBLIC_API_URL` | — | Frontend build-time API URL (e.g. `http://192.168.1.10:8123`) |
+| `APP_PASSWORD` | `123` | Single operator password guarding the whole instance |
+| `AUTH_ENABLED` | `true` | Set `false` to disable the login gate |
+| `AUTH_TOKEN_SECRET` | falls back to `ENCRYPTION_KEY` | Signing secret for session tokens |
+| `AUTH_TOKEN_TTL_SECONDS` | `604800` (7 days) | Session lifetime |
 
 ### Using the UI from a phone
 
@@ -103,8 +110,10 @@ policy, file-download security and full end-to-end workflow execution.
 
 ## Known limitations
 
-- **No authentication.** Every endpoint is open and all data is global. Add an
-  auth layer before exposing this beyond a trusted network.
+- **Single shared password, no users.** `APP_PASSWORD` (default `123`) guards
+  the whole instance; there are no per-user accounts, roles or audit trail.
+  Change it before exposing the app, and note the API is only as safe as that
+  password because transport may be plain HTTP on a LAN.
 - **MCP servers are in-memory.** They are lost on restart.
 - **No file upload endpoint** (download only).
 - **Local disk write requires the File System Access API**, i.e. a Chromium
