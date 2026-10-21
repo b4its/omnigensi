@@ -146,3 +146,26 @@
   - [x] Uji coba buat 4 Agent berbeda dengan model berbeda dan aktifkan tool pembuat dokumen pada Agent terakhir.
   - [x] Mount folder lokal di browser, jalankan workflow, pastikan siklus revisi berjalan jika draf kurang lengkap, dan pastikan file `.md` serta `.docx` otomatis muncul di *hard drive* lokal saat eksekusi selesai.
   - [x] Verifikasi tampilan kontras, keterbacaan teks, dan estetika Retro Cyberpunk Blue pada **Dark Mode** maupun **Light Mode**.
+
+---
+
+## Phase 10: Model Context Protocol (MCP), Supervisor Pattern & Human-in-the-Loop Security (Completed)
+- [x] **Model Context Protocol (MCP SDK v2.3.0) Integration:**
+  - [x] Implementasi `backend/app/engine/mcp_bridge.py` dengan dukungan transport stdio & SSE, auto-discovery tools, dan dynamic LangChain `StructuredTool` adapter.
+  - [x] Registrasi built-in MCP server (`filesystem-mcp`, `memory-mcp`) dan integrasi ke `AVAILABLE_TOOLS_METADATA` serta `DEVICE_TOOL_MAP`.
+  - [x] Endpoint REST API `backend/app/api/v1/mcp.py` (`GET/POST /api/v1/mcp/servers`, `GET /api/v1/mcp/servers/{name}/tools`, `POST /api/v1/mcp/servers/{name}/tools/{tool}/execute`).
+- [x] **Supervisor Agent Orchestration Pattern:**
+  - [x] Implementasi dedicated execution branch untuk `node_type == "supervisor"` pada `backend/app/engine/compiler.py`.
+  - [x] System prompt executive directive synthesis dan pemancaran event `supervisor_directive`.
+  - [x] Styling visual ungu neon khusus untuk Supervisor Agent Node di Xyflow canvas.
+- [x] **Human-in-the-Loop (HITL) Device Authorization Gate:**
+  - [x] Redis Pub/Sub gating `device_approval_required` saat agent dengan `require_device_approval=True` memanggil tool penulisan file.
+  - [x] Komunikasi dua arah dengan endpoint `POST /api/v1/executions/{id}/approve-tool`.
+  - [x] Modal interaktif bergaya Retro Cyberpunk Blue di `frontend/src/routes/playground/+page.svelte` dengan tombol `[AUTHORIZE WRITE]` dan `[REJECT & ABORT]`.
+- [x] **Multi-Model Token Cost Estimator Calculator:**
+  - [x] Modul `backend/app/engine/token_cost.py` yang memetakan rate per 1M token untuk OpenAI, Anthropic, DeepSeek, Meta Llama, Google Gemini, Qwen, Mistral, dan Ollama.
+  - [x] Kalkulasi akurat total token dan estimasi biaya USD yang tersimpan di PostgreSQL dan dipancarkan ke event `workflow_complete`.
+- [x] **Verifikasi & Test Suite:**
+  - [x] 19 unit & integration tests pytest lulus 100% (`tests/test_api.py`, `tests/test_tools.py`, `tests/test_security.py`, `tests/test_token_cost.py`, `tests/test_mcp.py`, `tests/test_compiler_extended.py`).
+  - [x] `svelte-check` lulus dengan 0 errors dan 0 warnings.
+  - [x] Production build Vite/SvelteKit sukses 100%.
