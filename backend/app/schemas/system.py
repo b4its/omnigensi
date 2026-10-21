@@ -121,3 +121,29 @@ class SystemStatsResponse(BaseModel):
     mcp_servers_enabled: int = Field(ge=0)
     tools_available: int = Field(ge=0)
     generated_at: str
+
+
+class LoginRequest(BaseModel):
+    """Operator password submitted from the web UI or a mobile app."""
+
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+class SessionInfo(BaseModel):
+    """Describes the current authentication state."""
+
+    authenticated: bool
+    auth_enabled: bool
+    expires_at: Optional[int] = Field(
+        default=None, description="Unix timestamp when the session expires"
+    )
+
+
+class LoginResponse(SessionInfo):
+    """Login result; the token is also set as an httpOnly cookie.
+
+    Native clients should store ``token`` and send it as
+    ``Authorization: Bearer <token>`` (or ``?token=`` for the SSE stream).
+    """
+
+    token: Optional[str] = None

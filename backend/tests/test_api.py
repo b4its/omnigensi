@@ -1,12 +1,15 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
 from app.main import app
+from tests.conftest import auth_headers
 
 
 @pytest.mark.asyncio
 async def test_health_check_endpoint():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers=auth_headers()
+    ) as client:
         resp = await client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
@@ -17,7 +20,9 @@ async def test_health_check_endpoint():
 @pytest.mark.asyncio
 async def test_tools_list_endpoint():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers=auth_headers()
+    ) as client:
         resp = await client.get("/api/v1/tools")
         assert resp.status_code == 200
         tools = resp.json()
@@ -32,7 +37,9 @@ async def test_tools_list_endpoint():
 @pytest.mark.asyncio
 async def test_providers_and_agents_endpoints():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers=auth_headers()
+    ) as client:
         # Providers
         resp = await client.get("/api/v1/providers")
         assert resp.status_code == 200
@@ -62,7 +69,9 @@ async def test_providers_and_agents_endpoints():
 @pytest.mark.asyncio
 async def test_cancel_execution_endpoint():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers=auth_headers()
+    ) as client:
         # Get workflow
         resp_wf = await client.get("/api/v1/workflows")
         assert resp_wf.status_code == 200

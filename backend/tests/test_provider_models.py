@@ -17,7 +17,10 @@ from httpx import ASGITransport, AsyncClient
 
 
 def _client() -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+    """Authenticated client; the API is password protected."""
+    from tests.conftest import make_client
+
+    return make_client(authenticated=True)
 
 
 # Captured once, before any patching, so the factory never calls itself.

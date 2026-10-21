@@ -8,7 +8,10 @@ from app.main import app
 
 
 def _client() -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+    """Authenticated client; the API is password protected."""
+    from tests.conftest import make_client
+
+    return make_client(authenticated=True)
 
 
 async def _first_agent_id(client: AsyncClient) -> str:

@@ -2,6 +2,7 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 from app.main import app
 from app.engine.mcp_bridge import mcp_manager, MCPServerConfig
+from tests.conftest import auth_headers
 
 
 @pytest.mark.asyncio
@@ -32,7 +33,9 @@ async def test_mcp_manager_servers_and_tools():
 @pytest.mark.asyncio
 async def test_mcp_api_endpoints():
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers=auth_headers(),
     ) as client:
         # GET /api/v1/mcp/servers
         res = await client.get("/api/v1/mcp/servers")

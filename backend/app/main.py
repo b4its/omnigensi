@@ -1,10 +1,11 @@
 import logging
 import mimetypes
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
+from app.core.auth import is_public_path, token_from_request, verify_token
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.errors import install_error_handlers
@@ -21,6 +22,7 @@ from app.schemas.system import (
 from app.api.v1.executions import router as executions_router, trigger_workflow_execution
 from app.api.v1.tools import router as tools_router
 from app.api.v1.mcp import router as mcp_router
+from app.api.v1.auth import router as auth_router
 from app.api.v1.stats import router as stats_router
 
 logging.basicConfig(
@@ -87,7 +89,36 @@ app.add_middleware(
     max_age=600,
 )
 
+# Authentication gate.
+#
+# One shared password protects the whole instance. Health, the client config,
+# the docs and the auth endpoints themselves stay public so a client can
+# discover the API and sign in.
+@app.middleware("http")
+async def require_session(request: Request, call_next):
+    if not settings.AUTH_ENABLED or is_public_path(request.url.path):
+        return await call_next(request)
+
+    # CORS preflight never carries credentials; let the CORS layer answer it.
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    token = token_from_request(request.headers, request.cookies, request.query_params)
+    if not verify_token(token):
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={
+                "success": False,
+                "detail": "Authentication required",
+                "code": "unauthorized",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
+
+
 # Register API v1 Routers
+app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(providers_router, prefix=settings.API_V1_STR)
 app.include_router(agents_router, prefix=settings.API_V1_STR)
 app.include_router(workflows_router, prefix=settings.API_V1_STR)

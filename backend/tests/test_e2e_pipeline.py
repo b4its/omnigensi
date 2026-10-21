@@ -4,6 +4,8 @@ import base64
 import uuid
 import pytest
 from httpx import AsyncClient, ASGITransport
+
+from tests.conftest import auth_headers
 from app.main import app
 from app.core.database import AsyncSessionLocal
 from app.models.workflow import Workflow
@@ -20,7 +22,9 @@ async def test_full_e2e_pipeline_execution():
         wf_id = wf.id
 
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers=auth_headers(),
     ) as client:
         # Trigger execution
         launch_res = await client.post(

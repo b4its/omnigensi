@@ -25,6 +25,23 @@ class Settings(BaseSettings):
     # Leave empty to auto-detect from the incoming request.
     PUBLIC_BASE_URL: str = ""
 
+    # --- Authentication ---------------------------------------------------
+    # Single shared operator password. This is deliberately simple: one
+    # password guards the whole instance, no users or roles.
+    APP_PASSWORD: str = "123"
+    # Set AUTH_ENABLED=false only for local experiments where a login prompt
+    # would get in the way.
+    AUTH_ENABLED: bool = True
+    # Secret used to sign session tokens. Falls back to ENCRYPTION_KEY so a
+    # single deployment secret is enough.
+    AUTH_TOKEN_SECRET: str = ""
+    # Session lifetime in seconds (default 7 days).
+    AUTH_TOKEN_TTL_SECONDS: int = 60 * 60 * 24 * 7
+    # Cookie name holding the signed session token.
+    AUTH_COOKIE_NAME: str = "omnigensi_session"
+    # Send the cookie only over HTTPS. Enable when serving behind TLS.
+    AUTH_COOKIE_SECURE: bool = False
+
     @property
     def cors_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
