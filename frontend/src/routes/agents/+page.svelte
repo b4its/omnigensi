@@ -481,6 +481,24 @@
                 </button>
               {/each}
             </div>
+
+            <!-- HITL Security Gate Toggle -->
+            <label class="flex items-center gap-2 pt-2.5 border-t border-[var(--border-color)]/60 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                bind:checked={formApproval}
+                class="w-4 h-4 rounded-none accent-[var(--accent-primary)] cursor-pointer"
+              />
+              <div>
+                <div class="text-[11px] font-bold text-[var(--accent-primary)] flex items-center gap-1.5">
+                  <Shield class="w-3.5 h-3.5" />
+                  REQUIRE HUMAN-IN-THE-LOOP (HITL) WRITE AUTHORIZATION
+                </div>
+                <div class="text-[9px] text-[var(--text-muted)]">
+                  When enabled, the agent will pause and prompt for operator approval in the Playground before modifying or creating disk files.
+                </div>
+              </div>
+            </label>
           </div>
 
           <div class="pt-3 border-t border-[var(--border-color)] flex justify-end gap-2">

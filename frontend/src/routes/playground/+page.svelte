@@ -86,7 +86,7 @@
     }
   });
 
-  function attachToExecution(execId: string) {
+  async function attachToExecution(execId: string) {
     activeExecutionId = execId;
     isExecuting = true;
     terminalLogs = [
@@ -96,6 +96,33 @@
         timestamp: new Date().toLocaleTimeString(),
       },
     ];
+
+    try {
+      const existing = await api.getExecution(execId);
+      if (existing) {
+        if (existing.task_prompt) taskPrompt = existing.task_prompt;
+        if (existing.workflow_id) selectedWorkflowId = existing.workflow_id;
+        if (existing.final_output) finalMarkdown = existing.final_output;
+        if (existing.generated_files && existing.generated_files.length > 0) {
+          generatedFiles = existing.generated_files;
+        }
+        if (existing.total_tokens) totalTokens = existing.total_tokens;
+        if (existing.estimated_cost_usd) estimatedCost = Number(existing.estimated_cost_usd);
+
+        if (existing.status === 'completed' || existing.status === 'failed') {
+          isExecuting = false;
+          terminalLogs = [
+            ...terminalLogs,
+            {
+              type: existing.status === 'completed' ? 'success' : 'error',
+              message: `Execution ${execId} loaded from database history (Status: ${existing.status.toUpperCase()}).`,
+              timestamp: new Date().toLocaleTimeString(),
+            },
+          ];
+          return;
+        }
+      }
+    } catch (_) {}
 
     if (eventSource) {
       eventSource.close();
