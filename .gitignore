@@ -42,6 +42,12 @@ backend/workspace/*
 # Database backups produced by `make db-dump`
 backups/
 
+# Generated workspace artifacts (including nested duplicates created when a
+# process runs from a different working directory) and browser test output
+**/backend/workspace/
+backend/backend/
+.playwright-mcp/
+
 # OS & IDE
 .DS_Store
 Thumbs.db
