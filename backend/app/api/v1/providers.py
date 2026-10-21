@@ -1,7 +1,9 @@
+import time
 import uuid
-from typing import List, Any
+from typing import List, Any, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +19,22 @@ from app.schemas.provider import (
 )
 
 router = APIRouter(prefix="/providers", tags=["LLM Providers"])
+
+
+class ProviderTestResult(BaseModel):
+    """Outcome of actively probing a provider's /models endpoint.
+
+    ``GET /models`` falls back to a canned list when the provider is
+    unreachable, so it can never report a bad key. This endpoint always
+    reports the truth so clients can show a real health state.
+    """
+
+    ok: bool
+    status_code: Optional[int] = None
+    checked_url: Optional[str] = None
+    model_count: int = 0
+    latency_ms: int = 0
+    error: Optional[str] = None
 
 
 @router.post("", response_model=ProviderResponse, status_code=status.HTTP_201_CREATED)
@@ -239,3 +257,85 @@ async def fetch_provider_models(
             ]
 
     return models
+
+
+@router.post("/{provider_id}/test", response_model=ProviderTestResult)
+async def test_provider_connection(
+    provider_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Any:
+    """Actively probe the provider to verify credentials and reachability.
+
+    Unlike ``GET /{id}/models`` this never substitutes fallback data: a wrong
+    key or an unreachable host reports ``ok: false`` with the real status.
+    """
+    provider = await db.get(LLMProvider, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    raw_key = decrypt_api_key(provider.api_key_encrypted)
+    headers = {"Authorization": f"Bearer {raw_key}"} if raw_key else {}
+    if provider.default_headers:
+        headers.update({str(k): str(v) for k, v in provider.default_headers.items()})
+
+    base_url = provider.base_url.rstrip("/")
+    candidates = []
+    if base_url.endswith("/v1") or base_url.endswith("/api/v1"):
+        candidates.append(f"{base_url}/models")
+    else:
+        candidates.extend(
+            [
+                f"{base_url}/v1/models",
+                f"{base_url}/models",
+                f"{base_url}/api/tags",
+            ]
+        )
+
+    started = time.perf_counter()
+    last_error = "No candidate endpoint responded"
+    last_status: Optional[int] = None
+    last_url: Optional[str] = None
+
+    async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+        for url in candidates:
+            try:
+                resp = await client.get(url, headers=headers)
+                last_url, last_status = url, resp.status_code
+                if resp.status_code == 200:
+                    payload = resp.json()
+
+                    def _count(block: Any) -> int:
+                        return len(block) if isinstance(block, list) else 0
+
+                    model_count = 0
+                    if isinstance(payload, dict):
+                        model_count = _count(payload.get("data")) or _count(
+                            payload.get("models")
+                        )
+                    return ProviderTestResult(
+                        ok=True,
+                        status_code=resp.status_code,
+                        checked_url=url,
+                        model_count=model_count,
+                        latency_ms=int((time.perf_counter() - started) * 1000),
+                    )
+                if resp.status_code in (401, 403):
+                    return ProviderTestResult(
+                        ok=False,
+                        status_code=resp.status_code,
+                        checked_url=url,
+                        latency_ms=int((time.perf_counter() - started) * 1000),
+                        error="Authentication failed - check the API key",
+                    )
+                last_error = f"Provider responded with HTTP {resp.status_code}"
+            except httpx.TimeoutException:
+                last_error = "Connection timed out"
+            except Exception as exc:  # noqa: BLE001 - surfaced to the client
+                last_error = str(exc)
+
+    return ProviderTestResult(
+        ok=False,
+        status_code=last_status,
+        checked_url=last_url,
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        error=last_error,
+    )

@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Any, Optional
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response, status
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Header, Query, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -203,12 +203,36 @@ async def trigger_workflow_execution(
 async def list_executions(
     response: Response,
     page: Pagination = Depends(),
+    status_filter: Optional[str] = Query(
+        None,
+        alias="status",
+        description="Filter by execution status (completed, failed, running, ...)",
+    ),
+    workflow_id: Optional[uuid.UUID] = Query(
+        None, description="Only return executions of this workflow"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    total = await db.scalar(select(func.count()).select_from(WorkflowExecution)) or 0
+    """Paginated execution history with optional status/workflow filters.
+
+    Filters are applied server-side so a mobile client can render an
+    "active runs" or per-workflow screen without downloading everything.
+    """
+    filters = []
+    if status_filter:
+        filters.append(WorkflowExecution.status == status_filter)
+    if workflow_id:
+        filters.append(WorkflowExecution.workflow_id == workflow_id)
+
+    total_stmt = select(func.count()).select_from(WorkflowExecution)
+    list_stmt = select(WorkflowExecution)
+    if filters:
+        total_stmt = total_stmt.where(*filters)
+        list_stmt = list_stmt.where(*filters)
+
+    total = await db.scalar(total_stmt) or 0
     result = await db.execute(
-        select(WorkflowExecution)
-        .order_by(WorkflowExecution.started_at.desc())
+        list_stmt.order_by(WorkflowExecution.started_at.desc())
         .limit(page.limit)
         .offset(page.offset)
     )
@@ -298,20 +322,64 @@ async def cancel_execution(
 
 
 @router.get("/{execution_id}/stream")
-async def stream_execution_telemetry(execution_id: uuid.UUID) -> StreamingResponse:
+async def stream_execution_telemetry(
+    execution_id: uuid.UUID,
+    last_event_id: Optional[str] = Header(
+        None,
+        alias="Last-Event-ID",
+        description="Highest event id already received; used to replay missed events",
+    ),
+) -> StreamingResponse:
     """
     Real-time Server-Sent Events (SSE) telemetry stream.
-    Transmits agent thought processes, token chunks, reviewer loops, and device file write payloads.
+
+    Every frame carries a monotonically increasing ``id:``. When a client
+    reconnects it may send ``Last-Event-ID`` and the server replays the
+    persisted event history from that point before continuing live, so a
+    phone that lost its connection does not silently miss telemetry.
     """
     channel_name = f"execution:{execution_id}"
 
+    def _parse_cursor(raw: Optional[str]) -> int:
+        try:
+            return max(0, int(raw)) if raw is not None else 0
+        except (TypeError, ValueError):
+            return 0
+
+    resume_from = _parse_cursor(last_event_id)
+
     async def sse_event_generator():
+        event_id = 0
         r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         pubsub = r.pubsub()
         await pubsub.subscribe(channel_name)
 
+        async def _terminal_payload(exec_obj) -> dict:
+            return {
+                "status": exec_obj.status,
+                "final_output": exec_obj.final_output,
+                "generated_files": exec_obj.generated_files or [],
+                "total_tokens": exec_obj.total_tokens or 0,
+                "estimated_cost_usd": float(exec_obj.estimated_cost_usd or 0),
+            }
+
         # Initial ping to establish connection immediately
-        yield f"event: connected\ndata: {json.dumps({'execution_id': str(execution_id), 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
+        yield f"event: connected\nid: 0\ndata: {json.dumps({'execution_id': str(execution_id), 'timestamp': datetime.now(timezone.utc).isoformat(), 'resumed_from': resume_from})}\n\n"
+
+        # Replay persisted telemetry when the client reconnects after a drop.
+        if resume_from > 0:
+            async with AsyncSessionLocal() as db_replay:
+                exec_obj = await db_replay.get(WorkflowExecution, execution_id)
+                if exec_obj and exec_obj.execution_logs:
+                    for idx, entry in enumerate(exec_obj.execution_logs, start=1):
+                        if idx <= resume_from:
+                            continue
+                        evt_type = (
+                            entry.get("type") or entry.get("event") or "message"
+                        )
+                        payload = entry.get("data", entry)
+                        event_id = idx
+                        yield f"event: {evt_type}\nid: {event_id}\ndata: {json.dumps(payload, default=str)}\n\n"
 
         # Check if execution already completed before SSE connected
         async with AsyncSessionLocal() as db_check:
@@ -325,7 +393,7 @@ async def stream_execution_telemetry(execution_id: uuid.UUID) -> StreamingRespon
                     "total_tokens": exec_obj.total_tokens or 0,
                     "estimated_cost_usd": float(exec_obj.estimated_cost_usd or 0),
                 }
-                yield f"event: {evt_type}\ndata: {json.dumps(payload)}\n\n"
+                yield f"event: {evt_type}\nid: {resume_from + 1}\ndata: {json.dumps(payload)}\n\n"
                 await pubsub.unsubscribe(channel_name)
                 await pubsub.aclose()
                 await r.aclose()
@@ -345,12 +413,14 @@ async def stream_execution_telemetry(execution_id: uuid.UUID) -> StreamingRespon
                             parsed = json.loads(raw_data)
                             evt_type = parsed.get("type", "message")
                             payload_str = json.dumps(parsed.get("data", {}))
-                            yield f"event: {evt_type}\ndata: {payload_str}\n\n"
+                            event_id += 1
+                            yield f"event: {evt_type}\nid: {resume_from + event_id}\ndata: {payload_str}\n\n"
 
                             if evt_type in ("workflow_complete", "workflow_failed"):
                                 break
                         except Exception:
-                            yield f"event: message\ndata: {raw_data}\n\n"
+                            event_id += 1
+                            yield f"event: message\nid: {resume_from + event_id}\ndata: {raw_data}\n\n"
                 else:
                     idle_ticks += 1
                     # Keep-alive heartbeat comment
@@ -368,7 +438,8 @@ async def stream_execution_telemetry(execution_id: uuid.UUID) -> StreamingRespon
                                     "total_tokens": exec_obj.total_tokens or 0,
                                     "estimated_cost_usd": float(exec_obj.estimated_cost_usd or 0),
                                 }
-                                yield f"event: {evt_type}\ndata: {json.dumps(payload)}\n\n"
+                                event_id += 1
+                                yield f"event: {evt_type}\nid: {resume_from + event_id}\ndata: {json.dumps(payload)}\n\n"
                                 break
                     await asyncio.sleep(0.3)
         except asyncio.CancelledError:

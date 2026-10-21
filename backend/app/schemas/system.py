@@ -89,3 +89,35 @@ class WorkflowExecutionCreated(BaseModel):
     id: uuid.UUID
     status: str
     stream_url: str = Field(description="Relative SSE path for this execution")
+
+
+class ExecutionStatusBreakdown(BaseModel):
+    """Execution counts keyed by terminal/running status."""
+
+    total: int = Field(ge=0)
+    completed: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    running: int = Field(ge=0)
+    pending: int = Field(ge=0)
+    waiting_approval: int = Field(ge=0)
+    cancelled: int = Field(ge=0)
+
+
+class SystemStatsResponse(BaseModel):
+    """Aggregate dashboard metrics.
+
+    Lets web and mobile clients render the command center without paging
+    through every collection to count rows or to sum tokens and cost.
+    """
+
+    providers: int = Field(ge=0)
+    providers_active: int = Field(ge=0)
+    agents: int = Field(ge=0)
+    workflows: int = Field(ge=0)
+    executions: ExecutionStatusBreakdown
+    total_tokens: int = Field(ge=0)
+    estimated_cost_usd: float = Field(ge=0)
+    mcp_servers: int = Field(ge=0)
+    mcp_servers_enabled: int = Field(ge=0)
+    tools_available: int = Field(ge=0)
+    generated_at: str

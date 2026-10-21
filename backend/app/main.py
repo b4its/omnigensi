@@ -21,6 +21,7 @@ from app.schemas.system import (
 from app.api.v1.executions import router as executions_router, trigger_workflow_execution
 from app.api.v1.tools import router as tools_router
 from app.api.v1.mcp import router as mcp_router
+from app.api.v1.stats import router as stats_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,7 +75,16 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Request-ID", "Content-Disposition"],
+    # Pagination metadata lives in headers, so CORS clients (browser and
+    # mobile WebViews) must be explicitly allowed to read them.
+    expose_headers=[
+        "X-Request-ID",
+        "Content-Disposition",
+        "X-Total-Count",
+        "X-Limit",
+        "X-Offset",
+    ],
+    max_age=600,
 )
 
 # Register API v1 Routers
@@ -84,6 +94,7 @@ app.include_router(workflows_router, prefix=settings.API_V1_STR)
 app.include_router(executions_router, prefix=settings.API_V1_STR)
 app.include_router(tools_router, prefix=settings.API_V1_STR)
 app.include_router(mcp_router, prefix=settings.API_V1_STR)
+app.include_router(stats_router, prefix=settings.API_V1_STR)
 
 # Also mount /api/v1/workflows/{id}/execute directly matching PRD table
 app.add_api_route(
