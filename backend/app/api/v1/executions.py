@@ -24,6 +24,7 @@ from app.schemas.execution import (
 from app.engine.publisher import ExecutionPublisher
 from app.engine.compiler import compile_workflow_graph
 from app.engine.tool_registry import create_markdown_document, create_word_document, create_pdf_document
+from app.engine.token_cost import calculate_execution_summary
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/executions", tags=["Workflow Executions"])
@@ -85,13 +86,28 @@ async def run_execution_background(
             generated_files = final_state.get("generated_files", [])
             execution_history = final_state.get("execution_history", [])
 
+            # Determine model name for cost calculation
+            primary_model = "gpt-4o"
+            if workflow.graph_schema and "nodes" in workflow.graph_schema:
+                for n in workflow.graph_schema["nodes"]:
+                    a_id = str(n.get("agent_id"))
+                    if a_id in agents_by_id:
+                        primary_model = agents_by_id[a_id].model_name
+                        break
+
+            metrics = calculate_execution_summary(
+                task_prompt=task_prompt,
+                execution_logs=execution_history,
+                model_name=primary_model,
+            )
+
             # Update DB
             execution.status = "completed"
             execution.final_output = final_output
             execution.generated_files = generated_files
             execution.execution_logs = execution_history
-            execution.total_tokens = sum(len(str(h.get("content_length", 0))) * 4 for h in execution_history) + 350
-            execution.estimated_cost_usd = 0.0025
+            execution.total_tokens = metrics["total_tokens"]
+            execution.estimated_cost_usd = metrics["estimated_cost_usd"]
             execution.completed_at = datetime.now(timezone.utc)
             await db.commit()
 
