@@ -184,7 +184,7 @@ export const api = {
 			`/api/v1/mcp/servers/${encodeURIComponent(serverName)}/tools`
 		),
 	executeMCPTool: (serverName: string, toolName: string, args: Record<string, any>) =>
-		apiFetch<{ success: boolean; result: any; error?: string }>(
+		apiFetch<{ status: string; result: any; message?: string }>(
 			`/api/v1/mcp/servers/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}/execute`,
 			{ method: 'POST', body: JSON.stringify({ arguments: args }) }
 		),

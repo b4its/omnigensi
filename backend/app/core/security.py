@@ -41,13 +41,27 @@ def sanitize_workspace_path(relative_path: str) -> Path:
     """
     Sanitizes and resolves relative_path within the configured workspace root.
     Raises ValueError on directory traversal attempts.
+
+    Accepts both workspace-relative paths ("docs/report.md") and absolute paths
+    produced by the generation tools ("/app/workspace/docs/report.md").
     """
     workspace_root = settings.workspace_path
-    clean_rel = Path(relative_path.lstrip("/\\"))
-    resolved = (workspace_root / clean_rel).resolve()
-    
-    # Path traversal check
-    if not str(resolved).startswith(str(workspace_root)):
-        raise ValueError(f"Path traversal detected: {relative_path} escapes workspace root")
-        
+    candidate = Path(relative_path)
+
+    # Absolute paths emitted by the tools are already rooted inside the
+    # workspace; treat anything else as relative to the workspace root.
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+    else:
+        resolved = (workspace_root / candidate).resolve()
+
+    # Resolve symlinks on both sides before comparing so a symlinked sibling
+    # directory (e.g. /workspace-evil) cannot pass a naive prefix check.
+    try:
+        resolved.relative_to(workspace_root.resolve())
+    except ValueError:
+        raise ValueError(
+            f"Path traversal detected: {relative_path} escapes workspace root"
+        )
+
     return resolved

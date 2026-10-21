@@ -18,11 +18,16 @@ class MCPServerToolsResponse(BaseModel):
 
 
 class MCPToolExecuteResponse(BaseModel):
-    """Result of executing one tool on an MCP server."""
+    """Result of executing one tool on an MCP server.
 
-    success: bool = True
+    The bridge already returns ``{"status": ..., "result"|"message": ...}``, so
+    the endpoint passes that through and only guarantees the shape is stable
+    for typed clients instead of double-wrapping it.
+    """
+
+    status: str = "success"
     result: Any = None
-    error: Optional[str] = None
+    message: Optional[str] = None
 
 
 @router.get("/servers", response_model=List[MCPServerConfig])
@@ -69,6 +74,12 @@ async def execute_mcp_tool(server_name: str, tool_name: str, payload: ToolExecut
 
     try:
         result = await mcp_manager.execute_tool(server_name, tool_name, payload.arguments)
-        return MCPToolExecuteResponse(success=True, result=result)
+        if not isinstance(result, dict):
+            return MCPToolExecuteResponse(status="success", result=result)
+        return MCPToolExecuteResponse(
+            status=str(result.get("status", "success")),
+            result=result.get("result"),
+            message=result.get("message"),
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
