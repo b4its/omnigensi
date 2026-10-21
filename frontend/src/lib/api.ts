@@ -59,6 +59,24 @@ export class ApiError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 
+/** localStorage key mirrored by the auth store. */
+const TOKEN_KEY = 'omnigensi_session_token';
+
+/**
+ * Reads the bearer token directly from localStorage.
+ *
+ * Imported lazily rather than from the auth store to avoid a circular
+ * dependency (the store itself calls apiFetch).
+ */
+function sessionToken(): string | null {
+	if (typeof localStorage === 'undefined') return null;
+	try {
+		return localStorage.getItem(TOKEN_KEY);
+	} catch {
+		return null;
+	}
+}
+
 function isAbortError(err: unknown): boolean {
 	return err instanceof DOMException && err.name === 'AbortError';
 }
@@ -79,10 +97,17 @@ function buildUrl(endpoint: string, params?: RequestOptions['params']): string {
 export async function apiFetch<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
 	const { params, headers: extraHeaders, timeoutMs, retries, ...rest } = options;
 	const url = buildUrl(endpoint, params);
-	const headers = {
+	const headers: Record<string, string> = {
 		'Content-Type': 'application/json',
-		...(extraHeaders || {})
+		...(extraHeaders as Record<string, string> | undefined)
 	};
+
+	// Native clients may not keep cookies, so the bearer token is the primary
+	// mechanism; the cookie still works for plain browser usage.
+	const token = sessionToken();
+	if (token && !headers.Authorization) {
+		headers.Authorization = `Bearer ${token}`;
+	}
 
 	const maxAttempts = (retries ?? 1) + 1;
 	let lastError: unknown;
@@ -100,7 +125,12 @@ export async function apiFetch<T>(endpoint: string, options: RequestOptions = {}
 		}
 
 		try {
-			const res = await fetch(url, { ...rest, headers, signal: controller.signal });
+			const res = await fetch(url, {
+				...rest,
+				headers,
+				signal: controller.signal,
+				credentials: 'include'
+			});
 
 			if (!res.ok) {
 				let errorMsg = `API Request failed with status ${res.status}`;
@@ -119,7 +149,12 @@ export async function apiFetch<T>(endpoint: string, options: RequestOptions = {}
 				} catch {
 					/* non-JSON body */
 				}
-				throw new ApiError(errorMsg, res.status, code);
+				const error = new ApiError(errorMsg, res.status, code);
+				if (res.status === 401) {
+					error.retryable = false;
+					window.dispatchEvent(new CustomEvent('omnigensi:unauthorized'));
+				}
+				throw error;
 			}
 			if (res.status === 204) {
 				return {} as T;
@@ -399,7 +434,12 @@ export const api = {
 			params: page as Record<string, string | number>
 		}),
 	getExecution: (id: string) => apiFetch<any>(`/api/v1/executions/${id}`),
-	getExecutionStreamUrl: (id: string) => `${API_BASE}/api/v1/executions/${id}/stream`,
+	getExecutionStreamUrl: (id: string) => {
+		// EventSource cannot set headers, so the token travels in the query.
+		const token = sessionToken();
+		const suffix = token ? `?token=${encodeURIComponent(token)}` : '';
+		return `${API_BASE}/api/v1/executions/${id}/stream${suffix}`;
+	},
 	approveTool: (id: string, toolCallId: string, approved: boolean, notes?: string) =>
 		apiFetch<any>(`/api/v1/executions/${id}/approve-tool`, {
 			method: 'POST',
@@ -444,8 +484,11 @@ export const api = {
 		),
 
 	// Files
-	getFileDownloadUrl: (filepath: string) =>
-		`${API_BASE}/api/v1/files/${filepath.split('/').map(encodeURIComponent).join('/')}`,
+	getFileDownloadUrl: (filepath: string) => {
+		const token = sessionToken();
+		const suffix = token ? `?token=${encodeURIComponent(token)}` : '';
+		return `${API_BASE}/api/v1/files/${filepath.split('/').map(encodeURIComponent).join('/')}${suffix}`;
+	},
 
 	// Device pairing helper: probes a candidate base URL (used by mobile setup)
 	probeBaseUrl: async (baseUrl: string): Promise<boolean> => {

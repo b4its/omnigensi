@@ -4,7 +4,9 @@
   import { onMount } from 'svelte';
   import { themeStore } from '$lib/stores/theme.svelte';
   import { deviceBridge } from '$lib/stores/deviceBridge.svelte';
+  import { goto } from '$app/navigation';
   import { api } from '$lib/api';
+  import { auth } from '$lib/stores/auth.svelte';
   import ThemeToggle from '$lib/components/ui/ThemeToggle.svelte';
   import NotifyHost from '$lib/components/ui/NotifyHost.svelte';
   import {
@@ -19,6 +21,8 @@
     Layers,
     Menu,
     X,
+    LogOut,
+    Loader2,
     History,
   } from 'lucide-svelte';
 
@@ -35,6 +39,35 @@
     { name: '[05] EXECUTION DECK', href: '/playground', icon: Terminal },
     { name: '[06] RUN HISTORY', href: '/executions', icon: History },
   ];
+
+  const isLoginRoute = $derived(page.url.pathname.startsWith('/login'));
+
+  onMount(async () => {
+    if (auth.authenticated === null) await auth.check();
+
+    if (!auth.authenticated && !isLoginRoute) {
+      const target = page.url.pathname + page.url.search;
+      goto(`/login?redirect=${encodeURIComponent(target)}`, { replaceState: true });
+    }
+  });
+
+  // A 401 from any request means the token is gone or expired.
+  $effect(() => {
+    const onUnauthorized = () => {
+      auth.authenticated = false;
+      if (!isLoginRoute) {
+        const target = page.url.pathname + page.url.search;
+        goto(`/login?redirect=${encodeURIComponent(target)}`, { replaceState: true });
+      }
+    };
+    window.addEventListener('omnigensi:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('omnigensi:unauthorized', onUnauthorized);
+  });
+
+  async function handleLogout() {
+    await auth.logout();
+    goto('/login', { replaceState: true });
+  }
 
   onMount(() => {
     const checkStatus = async () => {
@@ -56,6 +89,7 @@
   <header class="sticky top-0 z-40 border-b border-[var(--border-color)] bg-[var(--bg-surface)]/90 backdrop-blur-md px-4 py-2.5 flex items-center justify-between">
     <div class="flex items-center gap-3">
       <!-- Mobile Menu Button -->
+      {#if !isLoginRoute}
       <button
         type="button"
         onclick={() => mobileMenuOpen = !mobileMenuOpen}
@@ -65,6 +99,7 @@
       >
         {#if mobileMenuOpen}<X class="w-4 h-4" />{:else}<Menu class="w-4 h-4" />{/if}
       </button>
+      {/if}
 
       <!-- Logo & Branding -->
       <a href="/" class="flex items-center gap-2 group">
@@ -123,11 +158,24 @@
     <!-- Right Controls: Optical Mode Toggle -->
     <div class="flex items-center gap-2">
       <ThemeToggle />
+
+      {#if auth.authenticated}
+        <button
+          type="button"
+          onclick={handleLogout}
+          class="p-2 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--status-danger)] hover:border-[var(--status-danger)]/50 chamfer-sm"
+          title="Sign out"
+          aria-label="Sign out"
+        >
+          <LogOut class="w-4 h-4" />
+        </button>
+      {/if}
     </div>
   </header>
 
   <div class="flex-1 flex">
     <!-- Cyberdeck Navigation Sidebar (Desktop) -->
+    {#if !isLoginRoute}
     <aside class="hidden md:flex flex-col w-64 border-r border-[var(--border-color)] bg-[var(--bg-surface)]/80 backdrop-blur-sm p-3 gap-1">
       <div class="px-3 py-2 text-[10px] font-hud text-[var(--text-muted)] tracking-wider border-b border-[var(--border-color)]/50 mb-2">
         COMMAND DECK // NAVIGATION
@@ -173,6 +221,7 @@
         </button>
       </div>
     </aside>
+    {/if}
 
     <!-- Mobile Drawer -->
     {#if mobileMenuOpen}
@@ -227,7 +276,16 @@
 
     <!-- Main Content Stage -->
     <main class="flex-1 p-4 md:p-6 overflow-y-auto max-w-7xl mx-auto w-full">
-      {@render children()}
+      {#if isLoginRoute || auth.authenticated}
+        {@render children()}
+      {:else}
+        <!-- Do not mount pages before the session is known: each page fetches
+             data on mount and would emit avoidable 401s. -->
+        <div class="flex items-center justify-center py-24 gap-2 font-code text-xs text-[var(--text-muted)]">
+          <Loader2 class="w-4 h-4 animate-spin" />
+          <span>{auth.loading ? 'CHECKING SESSION...' : 'REDIRECTING TO SIGN IN...'}</span>
+        </div>
+      {/if}
     </main>
   </div>
 
