@@ -19,8 +19,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
 parts/
 sdist/
 var/
@@ -35,6 +33,7 @@ frontend/node_modules/
 frontend/.svelte-kit/
 frontend/build/
 .pnpm-debug.log*
+!frontend/src/lib/
 
 # Database & local workspace files
 backend/workspace/*
