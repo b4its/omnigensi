@@ -31,6 +31,15 @@
   let selectedMcpTools = $state<{ serverName: string; tools: any[] } | null>(null);
   let mcpLoading = $state<Record<string, boolean>>({});
   let modelSearch = $state<string>('');
+  let showMcpModal = $state<boolean>(false);
+  let mcpFormName = $state<string>('');
+  let mcpFormType = $state<string>('stdio');
+  let mcpFormCommand = $state<string>('');
+  let mcpFormArgs = $state<string>('');
+  let mcpFormUrl = $state<string>('');
+  let mcpFormDescription = $state<string>('');
+  let mcpFormError = $state<string>('');
+  let mcpFormSubmitting = $state<boolean>(false);
 
   // Form State
   let formName = $state<string>('');
@@ -70,6 +79,52 @@
       alert(`Failed to fetch MCP tools: ${e.message}`);
     } finally {
       mcpLoading[server.name] = false;
+    }
+  }
+
+  function openMcpModal() {
+    mcpFormName = '';
+    mcpFormType = 'stdio';
+    mcpFormCommand = '';
+    mcpFormArgs = '';
+    mcpFormUrl = '';
+    mcpFormDescription = '';
+    mcpFormError = '';
+    showMcpModal = true;
+  }
+
+  async function handleRegisterMcp(e: SubmitEvent) {
+    e.preventDefault();
+    if (!mcpFormName.trim()) {
+      mcpFormError = 'Server name is required.';
+      return;
+    }
+    if (mcpFormType === 'stdio' && !mcpFormCommand.trim()) {
+      mcpFormError = 'A command is required for stdio transport.';
+      return;
+    }
+    if (mcpFormType === 'sse' && !mcpFormUrl.trim()) {
+      mcpFormError = 'A URL is required for SSE transport.';
+      return;
+    }
+    mcpFormSubmitting = true;
+    mcpFormError = '';
+    try {
+      await api.registerMCPServer({
+        name: mcpFormName.trim(),
+        server_type: mcpFormType,
+        command: mcpFormType === 'stdio' ? mcpFormCommand.trim() : null,
+        args: mcpFormArgs.trim() ? mcpFormArgs.trim().split(/\s+/) : [],
+        url: mcpFormType === 'sse' ? mcpFormUrl.trim() : null,
+        enabled: true,
+        description: mcpFormDescription.trim() || 'Model Context Protocol Server Bridge',
+      });
+      showMcpModal = false;
+      await loadProviders();
+    } catch (err: any) {
+      mcpFormError = err.message || 'Failed to register MCP server';
+    } finally {
+      mcpFormSubmitting = false;
     }
   }
 
@@ -324,9 +379,15 @@
         </p>
       </div>
 
-      <span class="text-xs font-code px-2.5 py-1 rounded border border-[var(--status-success)]/40 bg-[var(--status-success)]/10 text-[var(--status-success)] font-bold">
-        MCP SDK v2.3 ACTIVE
-      </span>
+      <div class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+        <span class="text-xs font-code px-2.5 py-1 rounded border border-[var(--status-success)]/40 bg-[var(--status-success)]/10 text-[var(--status-success)] font-bold">
+          MCP SDK v2.3 ACTIVE
+        </span>
+        <CyberButton variant="outline" size="sm" onclick={openMcpModal}>
+          <Plus class="w-3.5 h-3.5" />
+          <span>REGISTER MCP SERVER</span>
+        </CyberButton>
+      </div>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -583,6 +644,118 @@
             </div>
           {/each}
         </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Register MCP Server Modal -->
+  {#if showMcpModal}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div class="w-full max-w-lg border border-[var(--accent-primary)] bg-[var(--bg-surface)] p-6 chamfer shadow-[var(--border-glow)] space-y-4">
+        <div class="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
+          <div class="font-hud font-bold text-sm text-[var(--text-primary)]">
+            REGISTER NEW MCP SERVER
+          </div>
+          <button
+            type="button"
+            onclick={() => showMcpModal = false}
+            class="p-2 text-[var(--text-muted)] hover:text-white text-xs font-hud"
+          >
+            [CLOSE]
+          </button>
+        </div>
+
+        {#if mcpFormError}
+          <div class="p-2.5 text-xs font-code text-[var(--status-danger)] bg-[var(--status-danger)]/10 border border-[var(--status-danger)]">
+            {mcpFormError}
+          </div>
+        {/if}
+
+        <form onsubmit={handleRegisterMcp} class="space-y-4 text-xs font-code">
+          <div>
+            <label class="block text-[var(--text-muted)] mb-1">
+              <span>Server Name</span>
+              <input
+                type="text"
+                bind:value={mcpFormName}
+                placeholder="e.g. postgres-mcp"
+                class="w-full mt-1 px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                required
+              />
+            </label>
+          </div>
+
+          <div>
+            <label class="block text-[var(--text-muted)] mb-1">
+              <span>Transport Protocol</span>
+              <select
+                bind:value={mcpFormType}
+                class="w-full mt-1 px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+              >
+                <option value="stdio">stdio (local subprocess)</option>
+                <option value="sse">SSE (remote HTTP endpoint)</option>
+              </select>
+            </label>
+          </div>
+
+          {#if mcpFormType === 'stdio'}
+            <div>
+              <label class="block text-[var(--text-muted)] mb-1">
+                <span>Command</span>
+                <input
+                  type="text"
+                  bind:value={mcpFormCommand}
+                  placeholder="npx"
+                  class="w-full mt-1 px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                />
+              </label>
+            </div>
+            <div>
+              <label class="block text-[var(--text-muted)] mb-1">
+                <span>Arguments (space separated)</span>
+                <input
+                  type="text"
+                  bind:value={mcpFormArgs}
+                  placeholder="-y @modelcontextprotocol/server-postgres"
+                  class="w-full mt-1 px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                />
+              </label>
+            </div>
+          {:else}
+            <div>
+              <label class="block text-[var(--text-muted)] mb-1">
+                <span>SSE URL</span>
+                <input
+                  type="url"
+                  bind:value={mcpFormUrl}
+                  placeholder="http://localhost:9000/sse"
+                  class="w-full mt-1 px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                />
+              </label>
+            </div>
+          {/if}
+
+          <div>
+            <label class="block text-[var(--text-muted)] mb-1">
+              <span>Description (optional)</span>
+              <input
+                type="text"
+                bind:value={mcpFormDescription}
+                placeholder="Grants agents access to the analytics database"
+                class="w-full mt-1 px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+              />
+            </label>
+          </div>
+
+          <div class="pt-3 border-t border-[var(--border-color)] flex justify-end gap-2">
+            <CyberButton variant="ghost" size="sm" type="button" onclick={() => showMcpModal = false}>
+              CANCEL
+            </CyberButton>
+            <CyberButton variant="primary" size="sm" type="submit" disabled={mcpFormSubmitting}>
+              {mcpFormSubmitting ? 'REGISTERING...' : 'REGISTER SERVER'}
+            </CyberButton>
+          </div>
+        </form>
       </div>
     </div>
   {/if}
