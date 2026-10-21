@@ -56,7 +56,9 @@
       <button
         type="button"
         onclick={() => mobileMenuOpen = !mobileMenuOpen}
-        class="md:hidden p-1.5 border border-[var(--border-color)] text-[var(--accent-primary)] chamfer-sm"
+        class="md:hidden p-2.5 border border-[var(--border-color)] text-[var(--accent-primary)] chamfer-sm"
+        aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+        aria-expanded={mobileMenuOpen}
       >
         {#if mobileMenuOpen}<X class="w-4 h-4" />{:else}<Menu class="w-4 h-4" />{/if}
       </button>
@@ -78,18 +80,18 @@
     </div>
 
     <!-- HUD Center & Status Badges -->
-    <div class="hidden lg:flex items-center gap-3 font-code text-xs">
-      <!-- Backend Status -->
-      <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-sm border border-[var(--border-color)] bg-[var(--bg-elevated)]/60">
+    <div class="flex items-center gap-3 font-code text-xs">
+      <!-- Backend Status (compact on mobile, full label on lg) -->
+      <div class="flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-sm border border-[var(--border-color)] bg-[var(--bg-elevated)]/60">
         <span class="w-2 h-2 rounded-full {backendOnline ? 'bg-[var(--status-success)] animate-pulse' : 'bg-[var(--status-danger)]'}"></span>
-        <span class="text-[11px] text-[var(--text-muted)]">CORE BACKEND:</span>
-        <span class="font-bold {backendOnline ? 'text-[var(--status-success)]' : 'text-[var(--status-danger)]'}">
-          {backendOnline ? 'ONLINE' : 'DISCONNECTED'}
+        <span class="hidden lg:inline text-[11px] text-[var(--text-muted)]">CORE BACKEND:</span>
+        <span class="font-bold text-[11px] {backendOnline ? 'text-[var(--status-success)]' : 'text-[var(--status-danger)]'}">
+          {backendOnline ? 'ONLINE' : 'OFFLINE'}
         </span>
       </div>
 
-      <!-- Local Device Bridge Status -->
-      <div class="flex items-center gap-2 px-2.5 py-1 rounded-sm border border-[var(--border-color)] bg-[var(--bg-elevated)]/60">
+      <!-- Local Device Bridge Status (desktop only: needs File System Access API) -->
+      <div class="hidden lg:flex items-center gap-2 px-2.5 py-1 rounded-sm border border-[var(--border-color)] bg-[var(--bg-elevated)]/60">
         <HardDrive class="w-3.5 h-3.5 {deviceBridge.directoryHandle ? 'text-[var(--status-success)]' : 'text-[var(--text-muted)]'}" />
         <span class="text-[11px] text-[var(--text-muted)]">HARDWARE BRIDGE:</span>
         {#if deviceBridge.directoryHandle}
@@ -171,17 +173,52 @@
 
     <!-- Mobile Drawer -->
     {#if mobileMenuOpen}
-      <div class="md:hidden fixed inset-x-0 top-[52px] z-50 bg-[var(--bg-surface)] border-b border-[var(--border-color)] p-4 space-y-2 shadow-2xl">
-        {#each navItems as item}
-          <a
-            href={item.href}
-            onclick={() => mobileMenuOpen = false}
-            class="flex items-center gap-3 p-3 rounded-sm font-hud text-xs border border-[var(--border-color)] bg-[var(--bg-elevated)]/40 text-[var(--text-primary)]"
+      <!-- Backdrop: tap outside to close -->
+      <button
+        type="button"
+        aria-label="Close navigation menu"
+        onclick={() => mobileMenuOpen = false}
+        class="md:hidden fixed inset-0 top-0 z-40 bg-black/60 backdrop-blur-sm cursor-default"
+      ></button>
+
+      <div class="md:hidden fixed top-0 right-0 bottom-0 z-50 w-[85%] max-w-sm overflow-y-auto bg-[var(--bg-surface)] border-l border-[var(--border-color)] shadow-2xl">
+        <div class="sticky top-0 flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] bg-[var(--bg-surface)]">
+          <span class="font-hud font-bold text-xs tracking-wider text-[var(--text-primary)]">COMMAND DECK // NAVIGATION</span>
+          <button
+            type="button"
+            onclick={() => (mobileMenuOpen = false)}
+            class="p-2 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+            aria-label="Close navigation menu"
           >
-            <item.icon class="w-4 h-4 text-[var(--accent-primary)]" />
-            <span>{item.name}</span>
-          </a>
-        {/each}
+            <X class="w-5 h-5" />
+          </button>
+        </div>
+
+        <nav class="p-3 space-y-2">
+          {#each navItems as item}
+            <a
+              href={item.href}
+              onclick={() => (mobileMenuOpen = false)}
+              class="flex items-center gap-3 p-3.5 rounded-sm font-hud text-xs border border-[var(--border-color)] bg-[var(--bg-elevated)]/40 text-[var(--text-primary)] active:bg-[var(--accent-primary)]/15"
+            >
+              <item.icon class="w-4 h-4 text-[var(--accent-primary)]" />
+              <span>{item.name}</span>
+            </a>
+          {/each}
+
+          <!-- Mobile device bridge: download-only fallback on touch devices -->
+          {#if !deviceBridge.isSupported}
+            <div class="mt-2 border border-[var(--border-color)] bg-[var(--bg-elevated)]/40 p-3 chamfer-sm space-y-1.5">
+              <div class="flex items-center gap-1.5 text-[10px] font-hud font-bold text-[var(--text-primary)]">
+                <FolderSync class="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                DEVICE BRIDGE
+              </div>
+              <p class="text-[11px] text-[var(--text-muted)] leading-tight">
+                Direct disk write is unavailable on this device. Generated artifacts download via the browser instead.
+              </p>
+            </div>
+          {/if}
+        </nav>
       </div>
     {/if}
 
