@@ -1,0 +1,149 @@
+@import 'tailwindcss';
+
+:root, :root[data-theme="dark"] {
+  --bg-primary: #040814;
+  --bg-surface: #0A1228;
+  --bg-elevated: #111E3E;
+  --text-primary: #E0F2FE;
+  --text-muted: #6488B8;
+  --accent-primary: #00F0FF;
+  --accent-secondary: #0066FF;
+  --status-success: #00FF9D;
+  --status-warning: #FFB800;
+  --status-danger: #FF0055;
+  --border-color: rgba(0, 240, 255, 0.25);
+  --border-glow: 0 0 12px rgba(0, 240, 255, 0.35);
+  --grid-line: rgba(0, 240, 255, 0.05);
+  --scanline-opacity: 0.04;
+}
+
+:root[data-theme="light"] {
+  --bg-primary: #EBF3FA;
+  --bg-surface: #FFFFFF;
+  --bg-elevated: #DCE8F5;
+  --text-primary: #071327;
+  --text-muted: #416288;
+  --accent-primary: #0048E5;
+  --accent-secondary: #0088B8;
+  --status-success: #008A5E;
+  --status-warning: #D97706;
+  --status-danger: #DC2626;
+  --border-color: rgba(0, 72, 229, 0.3);
+  --border-glow: 4px 4px 0px #0048E5;
+  --grid-line: rgba(0, 72, 229, 0.07);
+  --scanline-opacity: 0.01;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* Typography Helpers */
+.font-hud {
+  font-family: 'Orbitron', monospace, sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.font-code {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Blueprint Grid Background */
+.bg-blueprint {
+  background-image: 
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* CRT Scanline Overlay */
+.crt-overlay {
+  position: relative;
+}
+
+.crt-overlay::after {
+  content: " ";
+  display: block;
+  position: fixed;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+  z-index: 9999;
+  background-size: 100% 3px, 6px 100%;
+  pointer-events: none;
+  opacity: var(--scanline-opacity);
+}
+
+/* Chamfered Polygons (Retro-Cyberpunk 45 deg cut corners) */
+.chamfer {
+  clip-path: polygon(
+    0 0, 
+    calc(100% - 12px) 0, 
+    100% 12px, 
+    100% 100%, 
+    12px 100%, 
+    0 calc(100% - 12px)
+  );
+}
+
+.chamfer-sm {
+  clip-path: polygon(
+    0 0, 
+    calc(100% - 8px) 0, 
+    100% 8px, 
+    100% 100%, 
+    8px 100%, 
+    0 calc(100% - 8px)
+  );
+}
+
+.chamfer-lg {
+  clip-path: polygon(
+    0 0, 
+    calc(100% - 18px) 0, 
+    100% 18px, 
+    100% 100%, 
+    18px 100%, 
+    0 calc(100% - 18px)
+  );
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--accent-secondary);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-primary);
+}
+
+/* Glowing Animations */
+@keyframes neon-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(0, 240, 255, 0.7);
+  }
+}
+
+.animate-neon {
+  animation: neon-pulse 2s infinite ease-in-out;
+}

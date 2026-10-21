@@ -1,0 +1,47 @@
+# Environment
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+backend/.venv/
+.venv/
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Node & SvelteKit
+node_modules/
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+.pnpm-debug.log*
+
+# Database & local workspace files
+backend/workspace/*
+!backend/workspace/.gitkeep
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

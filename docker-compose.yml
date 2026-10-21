@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: omnigensi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: omnigensi
+      POSTGRES_PASSWORD: omnigensi_secret
+      POSTGRES_DB: omnigensi
+    ports:
+      - "5435:5432"
+    volumes:
+      - omnigensi_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omnigensi -d omnigensi"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: omnigensi-redis
+    restart: unless-stopped
+    ports:
+      - "6382:6379"
+    volumes:
+      - omnigensi_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: omnigensi-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://omnigensi:omnigensi_secret@postgres:5432/omnigensi
+      REDIS_URL: redis://redis:6379/0
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-eGZqX2tFMUdBQ2dMcm1xek1tV2M0X2V2WVBNT2pUZnU4Wms9}
+      WORKSPACE_ROOT: /app/workspace
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173
+    volumes:
+      - ./backend/workspace:/app/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: omnigensi-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  omnigensi_pgdata:
+  omnigensi_redisdata:
