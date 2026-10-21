@@ -22,7 +22,8 @@
     Cpu,
     LayoutGrid,
     ListFilter,
-  } from 'lucide-svelte';
+    ShieldCheck,
+} from 'lucide-svelte';
 
   let workflows = $state<any[]>([]);
   let agents = $state<any[]>([]);
@@ -125,6 +126,77 @@
     return agents.find(a => a.id === agentId);
   }
 
+  function buildGraphSchema(nodes: any[], edges: any[]) {
+    return {
+      entry_point: pipelineNodes[0]?.nodeId || 'node_1',
+      nodes,
+      edges,
+    };
+  }
+
+  /** Builds the current graph the same way save does, for validation. */
+  function currentGraph() {
+    const nodes = pipelineNodes.map((n) => ({ node_id: n.nodeId, agent_id: n.agentId }));
+    const edges: any[] = [];
+    for (let i = 0; i < pipelineNodes.length; i++) {
+      const curr = pipelineNodes[i];
+      const next = pipelineNodes[i + 1];
+      const ag = getAgent(curr.agentId);
+      if (ag?.node_type === 'reviewer') {
+        const prevWorker = pipelineNodes
+          .slice(0, i)
+          .reverse()
+          .find((p) => getAgent(p.agentId)?.node_type === 'worker');
+        edges.push({
+          from: curr.nodeId,
+          type: 'conditional',
+          on_approve: next ? next.nodeId : 'END',
+          on_reject: prevWorker ? prevWorker.nodeId : pipelineNodes[0].nodeId,
+        });
+      } else {
+        edges.push({ from: curr.nodeId, to: next ? next.nodeId : 'END', type: 'normal' });
+      }
+    }
+    return buildGraphSchema(nodes, edges);
+  }
+
+  let validation = $state<{
+    valid: boolean;
+    summary: string;
+    issues: { code: string; message: string; node_id?: string; field?: string }[];
+  } | null>(null);
+  let validating = $state(false);
+
+  /** Dry-run the graph so problems surface before saving. */
+  async function handleValidateWorkflow() {
+    validating = true;
+    validation = null;
+    try {
+      const res = await api.validateWorkflowGraph({
+        name: wfName || 'untitled',
+        max_revisions: wfMaxRevisions,
+        graph_schema: currentGraph(),
+      });
+      validation = res;
+      if (res.valid) notify.success(res.summary);
+      else notify.error(res.summary);
+    } catch (err) {
+      notify.fromError(err, 'Validation failed');
+    } finally {
+      validating = false;
+    }
+  }
+
+  async function handleDuplicateWorkflow(id: string) {
+    try {
+      await api.duplicateWorkflow(id);
+      await loadData();
+      notify.success('Workflow duplicated');
+    } catch (err) {
+      notify.fromError(err, 'Duplicate failed');
+    }
+  }
+
   async function handleSaveWorkflow() {
     if (!wfName.trim() || pipelineNodes.length === 0) {
       notify.warning('Provide a workflow name and at least one step.');
@@ -164,11 +236,7 @@
         }
       }
 
-      const graph_schema = {
-        entry_point: pipelineNodes[0]?.nodeId || 'node_1',
-        nodes,
-        edges,
-      };
+      const graph_schema = buildGraphSchema(nodes, edges);
 
       const payload = {
         name: wfName,
@@ -465,24 +533,74 @@
             {/if}
           </div>
 
-          <!-- Save Actions -->
-          <div class="pt-4 border-t border-[var(--border-color)] flex justify-between items-center">
-            {#if selectedWorkflow}
-              <button
-                type="button"
-                onclick={() => handleDeleteWorkflow(selectedWorkflow.id)}
-                class="text-[11px] text-[var(--status-danger)] hover:underline"
-              >
-                Delete Blueprint
-              </button>
-            {:else}
-              <div></div>
-            {/if}
+          <!-- Validation result -->
+          {#if validation}
+            <div
+              class="mt-3 border chamfer-sm px-3 py-2.5 font-code text-xs space-y-1.5 {validation.valid
+                ? 'border-[var(--status-success)]/50 bg-[var(--status-success)]/10'
+                : 'border-[var(--status-danger)]/50 bg-[var(--status-danger)]/10'}"
+              role="status"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <span class="font-bold {validation.valid ? 'text-[var(--status-success)]' : 'text-[var(--status-danger)]'}">
+                  {validation.valid ? 'GRAPH VALID' : 'GRAPH INVALID'}
+                </span>
+                <button
+                  type="button"
+                  onclick={() => (validation = null)}
+                  class="px-2 py-1 text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                >
+                  DISMISS
+                </button>
+              </div>
+              <p class="text-[11px] text-[var(--text-primary)] break-words">{validation.summary}</p>
+              {#if !validation.valid && validation.issues.length > 0}
+                <ul class="list-disc pl-4 space-y-0.5 text-[10px] text-[var(--text-muted)]">
+                  {#each validation.issues as issue}
+                    <li class="break-words">
+                      {issue.message}{#if issue.field} <span class="opacity-70">({issue.field})</span>{/if}
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </div>
+          {/if}
 
-            <CyberButton variant="primary" disabled={isSaving} onclick={handleSaveWorkflow}>
-              <Save class="w-4 h-4" />
-              <span>{isSaving ? 'COMPILING GRAPH...' : 'PERSIST GRAPH BLUEPRINT'}</span>
-            </CyberButton>
+          <!-- Save Actions -->
+          <div class="pt-4 border-t border-[var(--border-color)] flex flex-wrap justify-between items-center gap-2">
+            <div class="flex items-center gap-2">
+              {#if selectedWorkflow}
+                <button
+                  type="button"
+                  onclick={() => handleDuplicateWorkflow(selectedWorkflow.id)}
+                  class="px-3 py-2.5 text-[11px] font-hud border border-[var(--border-color)] text-[var(--text-primary)] hover:bg-[var(--bg-elevated)] chamfer-sm"
+                >
+                  DUPLICATE
+                </button>
+                <button
+                  type="button"
+                  onclick={() => handleDeleteWorkflow(selectedWorkflow.id)}
+                  class="px-3 py-2.5 text-[11px] font-hud border border-[var(--status-danger)]/40 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 chamfer-sm"
+                >
+                  DELETE
+                </button>
+              {/if}
+            </div>
+
+            <div class="flex items-center gap-2">
+              <CyberButton
+                variant="outline"
+                disabled={validating || pipelineNodes.length === 0}
+                onclick={handleValidateWorkflow}
+              >
+                <ShieldCheck class="w-4 h-4" />
+                <span>{validating ? 'VALIDATING...' : 'VALIDATE'}</span>
+              </CyberButton>
+              <CyberButton variant="primary" disabled={isSaving} onclick={handleSaveWorkflow}>
+                <Save class="w-4 h-4" />
+                <span>{isSaving ? 'COMPILING GRAPH...' : 'PERSIST GRAPH BLUEPRINT'}</span>
+              </CyberButton>
+            </div>
           </div>
         </div>
       </CyberCard>

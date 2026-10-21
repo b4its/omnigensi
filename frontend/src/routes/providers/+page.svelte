@@ -22,6 +22,8 @@
     Pencil,
     Power,
     Activity,
+    Loader2,
+    Play,
   } from 'lucide-svelte';
 
   let providers = $state<any[]>([]);
@@ -37,6 +39,13 @@
   let selectedProviderModels = $state<{ providerName: string; models: any[] } | null>(null);
   let selectedMcpTools = $state<{ serverName: string; tools: any[] } | null>(null);
   let mcpLoading = $state<Record<string, boolean>>({});
+  let mcpToolRunning = $state<string | null>(null);
+  let mcpToolResult = $state<{
+    tool: string;
+    ok: boolean;
+    result?: any;
+    error?: string | null;
+  } | null>(null);
   let modelSearch = $state<string>('');
   let showMcpModal = $state<boolean>(false);
   let editingMcpName = $state<string | null>(null);
@@ -75,6 +84,43 @@
       console.error(e);
     } finally {
       loading = false;
+    }
+  }
+
+  /** Executes one discovered MCP tool with JSON arguments to prove it works. */
+  async function handleRunMcpTool(serverName: string, tool: any) {
+    let args: Record<string, any> = {};
+    const props = tool.input_schema?.properties;
+    if (props && Object.keys(props).length > 0) {
+      const entered = prompt(
+        `Arguments for ${tool.name} as JSON:`,
+        JSON.stringify(Object.fromEntries(Object.keys(props).map((k) => [k, ''])), null, 2)
+      );
+      if (entered === null) return;
+      try {
+        args = JSON.parse(entered);
+      } catch {
+        notify.error('Arguments must be valid JSON');
+        return;
+      }
+    }
+
+    mcpToolRunning = tool.name;
+    mcpToolResult = null;
+    try {
+      const res = await api.executeMCPTool(serverName, tool.name, args);
+      mcpToolResult = {
+        tool: tool.name,
+        ok: res.status === 'success',
+        result: res.result,
+        error: res.message
+      };
+      if (res.status === 'success') notify.success(`${tool.name} executed`);
+      else notify.error(`${tool.name} failed: ${res.message ?? 'unknown error'}`);
+    } catch (err) {
+      notify.fromError(err, 'MCP tool execution failed');
+    } finally {
+      mcpToolRunning = null;
     }
   }
 
@@ -841,16 +887,40 @@
         <div class="p-4 overflow-y-auto space-y-3 font-code text-xs">
           {#each selectedMcpTools.tools as tool}
             <div class="p-3 border border-[var(--border-color)] bg-[var(--bg-elevated)]/40 rounded-sm space-y-1.5">
-              <div class="flex items-center justify-between">
-                <span class="font-bold text-[var(--accent-primary)] text-sm">{tool.name}</span>
-                <span class="text-[9px] uppercase px-1.5 py-0.5 rounded bg-[var(--accent-primary)]/20 text-[var(--accent-primary)] font-bold">
-                  LANGCHAIN READY
-                </span>
+              <div class="flex items-center justify-between gap-2">
+                <span class="font-bold text-[var(--accent-primary)] text-sm break-all">{tool.name}</span>
+                <button
+                  type="button"
+                  onclick={() => selectedMcpTools && handleRunMcpTool(selectedMcpTools.serverName, tool)}
+                  disabled={mcpToolRunning === tool.name}
+                  class="shrink-0 inline-flex items-center gap-1 px-2.5 py-2 text-[10px] font-hud border border-[var(--status-success)]/50 text-[var(--status-success)] hover:bg-[var(--status-success)]/10 chamfer-sm disabled:opacity-40"
+                >
+                  {#if mcpToolRunning === tool.name}
+                    <Loader2 class="w-3 h-3 animate-spin" />
+                    <span>RUNNING...</span>
+                  {:else}
+                    <Play class="w-3 h-3" />
+                    <span>RUN</span>
+                  {/if}
+                </button>
               </div>
               <p class="text-[11px] text-[var(--text-muted)]">{tool.description}</p>
               {#if tool.input_schema?.properties}
                 <div class="text-[10px] text-[var(--text-secondary)] mt-1 pt-1 border-t border-[var(--border-color)]/40 font-mono">
                   Args: {Object.keys(tool.input_schema.properties).join(', ')}
+                </div>
+              {/if}
+
+              {#if mcpToolResult && mcpToolResult.tool === tool.name}
+                <div class="mt-1 border chamfer-sm px-2 py-1.5 {mcpToolResult.ok
+                  ? 'border-[var(--status-success)]/50 bg-[var(--status-success)]/10'
+                  : 'border-[var(--status-danger)]/50 bg-[var(--status-danger)]/10'}">
+                  <div class="text-[10px] font-bold {mcpToolResult.ok ? 'text-[var(--status-success)]' : 'text-[var(--status-danger)]'}">
+                    {mcpToolResult.ok ? 'RESULT' : 'FAILED'}
+                  </div>
+                  <pre class="text-[10px] text-[var(--text-primary)] whitespace-pre-wrap break-words max-h-32 overflow-y-auto mt-1">{mcpToolResult.ok
+                    ? JSON.stringify(mcpToolResult.result, null, 2)
+                    : mcpToolResult.error}</pre>
                 </div>
               {/if}
             </div>

@@ -18,6 +18,9 @@
     Sliders,
     Sparkles,
     Check,
+    FlaskConical,
+    Loader2,
+    Copy,
   } from 'lucide-svelte';
 
   let agents = $state<any[]>([]);
@@ -44,6 +47,18 @@
   let formTools = $state<string[]>([]);
   let formApproval = $state<boolean>(false);
   let formError = $state<string>('');
+  let testingAgentId = $state<string | null>(null);
+  let agentTestPrompt = $state('Describe your role in one sentence.');
+  let agentTestResult = $state<{
+    agent_id?: string;
+    agent_name: string;
+    ok: boolean;
+    response_text?: string | null;
+    latency_ms: number;
+    model_name: string;
+    error?: string | null;
+  } | null>(null);
+  let duplicating = $state<string | null>(null);
   let formSubmitting = $state<boolean>(false);
 
   // Dynamic models for selected provider in form
@@ -177,6 +192,34 @@
     }
   }
 
+  async function handleTestAgent(agent: any) {
+    testingAgentId = agent.id;
+    agentTestResult = null;
+    try {
+      const res = await api.testAgent(agent.id, agentTestPrompt);
+      agentTestResult = res;
+      if (res.ok) notify.success(`${res.agent_name} replied in ${res.latency_ms}ms`);
+      else notify.error(`${res.agent_name}: ${res.error ?? 'test failed'}`);
+    } catch (err) {
+      notify.fromError(err, 'Agent test failed');
+    } finally {
+      testingAgentId = null;
+    }
+  }
+
+  async function handleDuplicateAgent(agent: any) {
+    duplicating = agent.id;
+    try {
+      await api.duplicateAgent(agent.id);
+      notify.success('Agent duplicated');
+      await loadData();
+    } catch (err) {
+      notify.fromError(err, 'Duplicate failed');
+    } finally {
+      duplicating = null;
+    }
+  }
+
   async function handleDeleteAgent(id: string, name: string) {
     const confirmed = await notify.confirm({
       title: 'DELETE AGENT',
@@ -292,9 +335,34 @@
               <div class="flex items-center gap-1">
                 <button
                   type="button"
+                  onclick={() => handleTestAgent(agent)}
+                  disabled={testingAgentId === agent.id}
+                  class="p-2.5 text-[var(--status-success)] hover:bg-[var(--status-success)]/10 rounded transition-colors disabled:opacity-40"
+                  title="Send a test prompt to this agent"
+                  aria-label={`Test ${agent.name}`}
+                >
+                  {#if testingAgentId === agent.id}
+                    <Loader2 class="w-3.5 h-3.5 animate-spin" />
+                  {:else}
+                    <FlaskConical class="w-3.5 h-3.5" />
+                  {/if}
+                </button>
+                <button
+                  type="button"
+                  onclick={() => handleDuplicateAgent(agent)}
+                  disabled={duplicating === agent.id}
+                  class="p-2.5 text-[var(--text-muted)] hover:text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 rounded transition-colors disabled:opacity-40"
+                  title="Duplicate agent"
+                  aria-label={`Duplicate ${agent.name}`}
+                >
+                  <Copy class="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
                   onclick={() => openEditModal(agent)}
                   class="p-2.5 text-[var(--text-muted)] hover:text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 rounded transition-colors"
                   title="Edit agent"
+                  aria-label={`Edit ${agent.name}`}
                 >
                   <Edit3 class="w-3.5 h-3.5" />
                 </button>
@@ -303,6 +371,7 @@
                   onclick={() => handleDeleteAgent(agent.id, agent.name)}
                   class="p-2.5 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 rounded transition-colors"
                   title="Delete agent"
+                  aria-label={`Delete ${agent.name}`}
                 >
                   <Trash2 class="w-3.5 h-3.5" />
                 </button>
@@ -312,6 +381,51 @@
         </CyberCard>
       {/each}
     </div>
+  {/if}
+
+  <!-- Agent response test -->
+  {#if agentTestResult}
+    <CyberCard code="TEST.01" title={`AGENT TEST // ${agentTestResult.agent_name}`}>
+      <div class="space-y-2 font-code text-xs">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span class="text-[10px] text-[var(--text-muted)]">
+            model: <span class="text-[var(--text-primary)]">{agentTestResult.model_name}</span>
+          </span>
+          <span class="text-[10px] font-bold {agentTestResult.ok ? 'text-[var(--status-success)]' : 'text-[var(--status-danger)]'}">
+            {agentTestResult.ok ? `RESPONSE OK · ${agentTestResult.latency_ms}ms` : 'REQUEST FAILED'}
+          </span>
+        </div>
+
+        {#if agentTestResult.ok}
+          <p class="text-[11px] text-[var(--text-primary)] whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+            {agentTestResult.response_text}
+          </p>
+        {:else}
+          <p class="text-[11px] text-[var(--status-danger)] break-words">{agentTestResult.error}</p>
+        {/if}
+
+        <div class="flex flex-wrap gap-2 pt-2 border-t border-[var(--border-color)]/40">
+          <input
+            type="text"
+            bind:value={agentTestPrompt}
+            class="flex-1 min-w-[180px] px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] text-[11px] focus:outline-none focus:border-[var(--accent-primary)]"
+            placeholder="Test prompt"
+          />
+          <CyberButton
+            variant="outline"
+            size="sm"
+            disabled={!agentTestResult.agent_id || testingAgentId !== null}
+            onclick={() => {
+              const target = agents.find((a) => a.id === agentTestResult?.agent_id);
+              if (target) handleTestAgent(target);
+            }}
+          >
+            {testingAgentId ? 'TESTING...' : 'RE-TEST'}
+          </CyberButton>
+          <CyberButton variant="ghost" size="sm" onclick={() => (agentTestResult = null)}>CLEAR</CyberButton>
+        </div>
+      </div>
+    </CyberCard>
   {/if}
 
   <!-- Create / Edit Drawer Modal -->

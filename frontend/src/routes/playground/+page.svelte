@@ -18,6 +18,7 @@
     FileText,
     FileCode,
     Download,
+    Copy,
     FolderCheck,
     Cpu,
     Sparkles,
@@ -497,6 +498,60 @@
     }
   }
 
+  /** Deliverable text: the finished draft, or the live buffer if still running. */
+  function deliverableText(): string {
+    return finalMarkdown || streamBuffer || '';
+  }
+
+  async function copyOutput() {
+    const text = deliverableText();
+    if (!text) {
+      notify.warning('There is no output to copy yet.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      notify.success('Output copied to clipboard');
+    } catch {
+      notify.error('Clipboard unavailable - use DOWNLOAD instead');
+    }
+  }
+
+  function downloadOutput() {
+    const text = deliverableText();
+    if (!text) {
+      notify.warning('There is no output to download yet.');
+      return;
+    }
+    const slug = (taskPrompt || 'omnigensi-output')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .slice(0, 48)
+      .replace(/^-|-$/g, '');
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${slug || 'omnigensi-output'}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    notify.success('Draft downloaded as Markdown');
+  }
+
+  /** Re-runs the current execution's workflow with the same prompt. */
+  async function rerunExecution() {
+    if (!activeExecutionId) return;
+    try {
+      const created = await api.retryExecution(activeExecutionId);
+      notify.success('Re-running with the same prompt');
+      await attachToExecution(created.id);
+    } catch (err) {
+      notify.fromError(err, 'Re-run failed');
+    }
+  }
+
   const renderedHtml = $derived(marked.parse(finalMarkdown || streamBuffer || ''));
 </script>
 
@@ -627,6 +682,18 @@
             <Play class="w-4 h-4 fill-current" />
             <span>{isExecuting ? 'EXECUTION IN PROGRESS...' : 'DISPATCH AGENT PIPELINE'}</span>
           </CyberButton>
+
+          <!-- Re-run the current execution with the same prompt -->
+          {#if activeExecutionId && !isExecuting}
+            <CyberButton
+              variant="outline"
+              class="w-full py-2.5"
+              onclick={rerunExecution}
+            >
+              <RotateCcw class="w-3.5 h-3.5" />
+              <span>RE-RUN WITH SAME PROMPT</span>
+            </CyberButton>
+          {/if}
 
           <!-- Abort Control (only while a run is live) -->
           {#if isExecuting && activeExecutionId}
@@ -763,6 +830,26 @@
         </div>
 
         {#if activeTab === 'output'}
+          <div class="flex items-center justify-end gap-1 pb-2">
+            <button
+              type="button"
+              onclick={copyOutput}
+              disabled={!deliverableText()}
+              class="inline-flex items-center gap-1 px-2.5 py-2 text-[10px] font-hud border border-[var(--border-color)] text-[var(--text-primary)] hover:bg-[var(--bg-elevated)] chamfer-sm disabled:opacity-40"
+            >
+              <Copy class="w-3 h-3" />
+              COPY
+            </button>
+            <button
+              type="button"
+              onclick={downloadOutput}
+              disabled={!deliverableText()}
+              class="inline-flex items-center gap-1 px-2.5 py-2 text-[10px] font-hud border border-[var(--accent-primary)]/50 text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 chamfer-sm disabled:opacity-40"
+            >
+              <Download class="w-3 h-3" />
+              DOWNLOAD .MD
+            </button>
+          </div>
           <div class="prose prose-xs max-h-[60dvh] lg:max-h-[460px] overflow-y-auto font-code text-xs leading-relaxed text-[var(--text-primary)] dark-prose">
             {#if renderedHtml}
               {@html renderedHtml}
