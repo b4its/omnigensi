@@ -1,11 +1,14 @@
 import re
 import json
 import logging
+import asyncio
 from typing import Dict, Any, List, Optional
+import redis.asyncio as aioredis
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 
+from app.core.config import settings
 from app.engine.state import DynamicTeamState, ReviewDecision
 from app.engine.llm_factory import create_llm_client
 from app.engine.tool_registry import DEVICE_TOOL_MAP
@@ -14,6 +17,41 @@ from app.models.agent import AgentTemplate
 from app.models.provider import LLMProvider
 
 logger = logging.getLogger(__name__)
+
+
+async def wait_for_tool_approval(execution_id: str, tool_call_id: str, timeout: float = 60.0) -> bool:
+    """
+    Subscribes to Redis execution channel and waits for Human-In-The-Loop approval/rejection.
+    """
+    try:
+        r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        pubsub = r.pubsub()
+        channel = f"execution:{execution_id}"
+        await pubsub.subscribe(channel)
+        start_time = asyncio.get_event_loop().time()
+        while (asyncio.get_event_loop().time() - start_time) < timeout:
+            msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            if msg and isinstance(msg.get("data"), str):
+                try:
+                    payload = json.loads(msg["data"])
+                    if payload.get("type") == "tool_approval_response":
+                        data = payload.get("data", {})
+                        if data.get("tool_call_id") == tool_call_id:
+                            return bool(data.get("approved", False))
+                except Exception:
+                    pass
+            await asyncio.sleep(0.25)
+        return False
+    except Exception as e:
+        logger.warning(f"Error while waiting for tool approval: {e}")
+        return False
+    finally:
+        try:
+            await pubsub.unsubscribe(channel)
+            await pubsub.aclose()
+            await r.aclose()
+        except Exception:
+            pass
 
 
 def _parse_reviewer_json_fallback(text: str) -> ReviewDecision:
@@ -100,10 +138,41 @@ async def _simulate_agent_fallback(
             }],
         }
 
-    # Worker node simulation
+    # Worker / Supervisor node simulation
     generated_files = []
     task = state.get("task_prompt", "AI System Architecture")
     rev_count = state.get("revision_count", 0)
+
+    if agent.node_type == "supervisor":
+        content = (
+            f"### Executive Directives & Synthesis by {agent.name}\n"
+            f"**Strategic Priority:** {task}\n\n"
+            f"1. **Operational Assessment:** Research dossiers and technical blueprints analyzed.\n"
+            f"2. **Harmonization:** All sub-agent components verified for architectural coherence.\n"
+            f"3. **Directive:** Approved for final document compilation and hardware synchronization."
+        )
+        if publisher:
+            await publisher.publish("token_chunk", {"node_id": node_id, "agent_name": agent.name, "chunk": content})
+            await publisher.publish("supervisor_directive", {
+                "node_id": node_id,
+                "agent_name": agent.name,
+                "directive": content,
+            })
+        new_context = (
+            f"{state.get('shared_context', '')}\n\n"
+            f"### Executive Directive from {agent.name} (Supervisor):\n{content}"
+        ).strip()
+        return {
+            "current_draft": content,
+            "shared_context": new_context,
+            "execution_history": [{
+                "node_id": node_id,
+                "agent_name": agent.name,
+                "role": agent.role,
+                "node_type": "supervisor",
+                "content_length": len(content),
+            }],
+        }
 
     if "research" in agent.role.lower() or "research" in agent.name.lower():
         content = (
@@ -138,6 +207,40 @@ async def _simulate_agent_fallback(
         # Execute actual tools to generate files
         clean_title = "".join(c for c in task if c.isalnum() or c in (" ", "_", "-")).strip()[:40]
         base_name = clean_title.replace(" ", "_").lower() or "omnigensi_artifact"
+
+        if agent.require_device_approval and publisher:
+            sim_tool_id = f"sim_tool_{node_id[:8]}"
+            await publisher.publish(
+                "device_approval_required",
+                {
+                    "execution_id": publisher.execution_id,
+                    "node_id": node_id,
+                    "agent_name": agent.name,
+                    "tool_call_id": sim_tool_id,
+                    "tool_name": "create_markdown_document",
+                    "tool_args": {"filename": f"{base_name}_spec.md", "content": "Autonomous System Blueprint"},
+                },
+            )
+            approved = await wait_for_tool_approval(publisher.execution_id, sim_tool_id, timeout=45.0)
+            if not approved:
+                denial_msg = "Device write authorization rejected or timed out by user."
+                if publisher:
+                    await publisher.publish(
+                        "token_chunk",
+                        {"node_id": node_id, "agent_name": agent.name, "chunk": f"\n[DEVICE ACCESS DENIED]: {denial_msg}\n"},
+                    )
+                return {
+                    "current_draft": "Document creation aborted due to user denial.",
+                    "shared_context": f"{state.get('shared_context', '')}\n\nDevice write aborted by user.",
+                    "generated_files": [],
+                    "execution_history": [{
+                        "node_id": node_id,
+                        "agent_name": agent.name,
+                        "role": agent.role,
+                        "node_type": agent.node_type,
+                        "content_length": 0,
+                    }],
+                }
 
         md_content = (
             f"# {task}\n\n"
@@ -335,7 +438,52 @@ def build_dynamic_agent_node(
                     "execution_history": [history_entry],
                 }
 
-            # ---------------- WORKER / SUPERVISOR NODE ----------------
+            # ---------------- SUPERVISOR NODE ----------------
+            elif agent.node_type == "supervisor":
+                system_prompt = (
+                    f"You are {agent.name}, an Executive Multi-Agent Supervisor.\n"
+                    f"ROLE: {agent.role}\n"
+                    f"GOAL: {agent.goal}\n"
+                    f"BACKSTORY: {agent.backstory}\n\n"
+                    f"Your mission is to synthesize the team's accumulated context, resolve ambiguities, "
+                    f"and issue strategic executive directives and a master overview for the workflow mission."
+                )
+                prompt_parts = [f"PRIMARY MISSION:\n{state.get('task_prompt', '')}"]
+                if state.get("shared_context"):
+                    prompt_parts.append(f"ACCUMULATED AGENT DELIVERABLES:\n{state['shared_context']}")
+                if state.get("current_draft"):
+                    prompt_parts.append(f"LATEST AGENT DRAFT:\n{state['current_draft']}")
+
+                messages = [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content="\n\n".join(prompt_parts)),
+                ]
+
+                ai_msg = await llm.ainvoke(messages)
+                final_content = ai_msg.content if isinstance(ai_msg.content, str) else str(ai_msg.content)
+                if publisher:
+                    await publisher.publish(
+                        "token_chunk",
+                        {"node_id": node_id, "agent_name": agent.name, "chunk": final_content},
+                    )
+                    await publisher.publish(
+                        "supervisor_directive",
+                        {"node_id": node_id, "agent_name": agent.name, "directive": final_content},
+                    )
+
+                history_entry["content_length"] = len(final_content)
+                new_context = (
+                    f"{state.get('shared_context', '')}\n\n"
+                    f"### Executive Directive from {agent.name} (Supervisor):\n{final_content}"
+                ).strip()
+
+                return {
+                    "current_draft": final_content,
+                    "shared_context": new_context,
+                    "execution_history": [history_entry],
+                }
+
+            # ---------------- WORKER NODE ----------------
             else:
                 tools_instruction = ""
                 if selected_tools:
@@ -387,6 +535,41 @@ def build_dynamic_agent_node(
                             tool_name = tool_call["name"]
                             tool_args = tool_call["args"]
                             tool_id = tool_call["id"]
+
+                            # Human-in-the-Loop authorization check
+                            if agent.require_device_approval and publisher:
+                                await publisher.publish(
+                                    "device_approval_required",
+                                    {
+                                        "execution_id": publisher.execution_id,
+                                        "node_id": node_id,
+                                        "agent_name": agent.name,
+                                        "tool_call_id": tool_id,
+                                        "tool_name": tool_name,
+                                        "tool_args": tool_args,
+                                    },
+                                )
+                                approved = await wait_for_tool_approval(
+                                    publisher.execution_id, tool_id, timeout=60.0
+                                )
+                                if not approved:
+                                    rejection_msg = f"User declined or timed out authorization for {tool_name}."
+                                    if publisher:
+                                        await publisher.publish(
+                                            "token_chunk",
+                                            {
+                                                "node_id": node_id,
+                                                "agent_name": agent.name,
+                                                "chunk": f"\n[DEVICE ACCESS DENIED]: {rejection_msg}\n",
+                                            },
+                                        )
+                                    messages.append(
+                                        ToolMessage(
+                                            content=json.dumps({"status": "rejected", "message": rejection_msg}),
+                                            tool_call_id=tool_id,
+                                        )
+                                    )
+                                    continue
 
                             target_func = DEVICE_TOOL_MAP.get(tool_name)
                             if target_func:

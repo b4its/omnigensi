@@ -2,7 +2,7 @@
   import { Terminal, ShieldAlert, CheckCircle, FileText, Cpu } from 'lucide-svelte';
 
   export interface TerminalEntry {
-    type: 'agent_start' | 'token_chunk' | 'review_result' | 'device_file_write' | 'info' | 'error' | 'success';
+    type: 'agent_start' | 'token_chunk' | 'review_result' | 'device_file_write' | 'info' | 'error' | 'success' | 'warning';
     message?: string;
     agent_name?: string;
     node_id?: string;
@@ -93,6 +93,10 @@
         {:else if item.type === 'error'}
           <span class="text-[var(--status-danger)] font-bold"> [ALERT CRITICAL]</span>
           <span class="text-[var(--status-danger)]"> {item.message}</span>
+
+        {:else if item.type === 'warning'}
+          <span class="text-[var(--status-warning)] font-bold"> [AUDIT GATE]</span>
+          <span class="text-[var(--status-warning)]"> {item.message}</span>
 
         {:else if item.type === 'success'}
           <span class="text-[var(--status-success)] font-bold"> [SYS COMPLETE]</span>

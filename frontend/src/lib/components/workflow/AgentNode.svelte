@@ -20,11 +20,12 @@
   let { data, isConnectable = true }: Props = $props();
 
   const isReviewer = $derived(data.node_type === 'reviewer');
+  const isSupervisor = $derived(data.node_type === 'supervisor');
 </script>
 
 <!-- Custom Cyberpunk Agent Node for Xyflow Canvas -->
 <div
-  class="relative min-w-[220px] max-w-[280px] p-3 border chamfer transition-all duration-200 select-none {data.is_active ? 'border-[var(--accent-primary)] bg-[var(--bg-surface)] shadow-[var(--border-glow)] animate-neon' : isReviewer ? 'border-[var(--status-warning)]/70 bg-[var(--bg-surface)]' : 'border-[var(--border-color)] bg-[var(--bg-surface)]'}"
+  class="relative min-w-[220px] max-w-[280px] p-3 border chamfer transition-all duration-200 select-none {data.is_active ? 'border-[var(--accent-primary)] bg-[var(--bg-surface)] shadow-[var(--border-glow)] animate-neon' : isSupervisor ? 'border-[#a855f7]/70 bg-[var(--bg-surface)]' : isReviewer ? 'border-[var(--status-warning)]/70 bg-[var(--bg-surface)]' : 'border-[var(--border-color)] bg-[var(--bg-surface)]'}"
 >
   <!-- Target Handle (Inputs) -->
   <Handle
@@ -37,14 +38,14 @@
   <!-- Node Header -->
   <div class="flex items-center justify-between gap-2 border-b border-[var(--border-color)]/60 pb-1.5 mb-2">
     <div class="flex items-center gap-1.5">
-      <Bot class="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+      <Bot class="w-3.5 h-3.5 {isSupervisor ? 'text-[#a855f7]' : 'text-[var(--accent-primary)]'}" />
       <span class="font-hud font-bold text-xs text-[var(--text-primary)] truncate">
         {data.agent_name || data.label || 'AGENT NODE'}
       </span>
     </div>
 
     <span
-      class="text-[9px] font-code px-1.5 py-0.2 rounded uppercase font-bold {isReviewer ? 'bg-[var(--status-warning)]/20 text-[var(--status-warning)] border border-[var(--status-warning)]/30' : 'bg-[var(--accent-primary)]/20 text-[var(--accent-primary)] border border-[var(--accent-primary)]/30'}"
+      class="text-[9px] font-code px-1.5 py-0.2 rounded uppercase font-bold {isSupervisor ? 'bg-[#a855f7]/20 text-[#c084fc] border border-[#a855f7]/40' : isReviewer ? 'bg-[var(--status-warning)]/20 text-[var(--status-warning)] border border-[var(--status-warning)]/30' : 'bg-[var(--accent-primary)]/20 text-[var(--accent-primary)] border border-[var(--accent-primary)]/30'}"
     >
       {data.node_type || 'worker'}
     </span>

@@ -47,6 +47,16 @@
   let finalMarkdown = $state<string>('');
   let generatedFiles = $state<any[]>([]);
 
+  // Human-in-the-Loop Device Approval
+  let pendingApproval = $state<{
+    execution_id: string;
+    node_id: string;
+    agent_name: string;
+    tool_call_id: string;
+    tool_name: string;
+    tool_args: any;
+  } | null>(null);
+
   let eventSource: EventSource | null = null;
 
   onMount(async () => {
@@ -148,6 +158,31 @@
       ];
     });
 
+    eventSource.addEventListener('device_approval_required', (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      pendingApproval = data;
+      terminalLogs = [
+        ...terminalLogs,
+        {
+          type: 'warning',
+          message: `[SECURITY AUDIT] Write approval requested by ${data.agent_name} for tool '${data.tool_name}'. Operator signature required.`,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ];
+    });
+
+    eventSource.addEventListener('supervisor_directive', (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      terminalLogs = [
+        ...terminalLogs,
+        {
+          type: 'info',
+          message: `[SUPERVISOR DIRECTIVE] ${data.agent_name}: Strategic synthesis issued.`,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ];
+    });
+
     eventSource.addEventListener('device_file_write', async (e: MessageEvent) => {
       const data = JSON.parse(e.data);
       generatedFiles = [...generatedFiles, data];
@@ -215,6 +250,26 @@
     eventSource.onerror = () => {
       // Reconnection or close
     };
+  }
+
+  async function handleApproval(approved: boolean) {
+    if (!pendingApproval || !activeExecutionId) return;
+    const approvalData = pendingApproval;
+    try {
+      await api.approveTool(activeExecutionId, approvalData.tool_call_id, approved);
+      terminalLogs = [
+        ...terminalLogs,
+        {
+          type: approved ? 'success' : 'error',
+          message: `[OPERATOR DECISION]: Write authorization ${approved ? 'GRANTED' : 'REJECTED'} for ${approvalData.tool_name}.`,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ];
+    } catch (e: any) {
+      console.error('Failed to submit approval:', e);
+    } finally {
+      pendingApproval = null;
+    }
   }
 
   async function handleExecute() {
@@ -464,4 +519,47 @@
       </CyberCard>
     </div>
   </div>
+
+  <!-- Human In The Loop (HITL) Authorization Modal -->
+  {#if pendingApproval}
+    <div class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="bg-[var(--bg-surface)] border-2 border-[var(--accent-warning, #f59e0b)] p-6 max-w-lg w-full relative cyber-chamfer-lg shadow-2xl space-y-4">
+        <div class="flex items-center gap-3 border-b border-[var(--border-color)] pb-3">
+          <ShieldAlert class="w-7 h-7 text-[var(--accent-warning, #f59e0b)] animate-pulse" />
+          <div>
+            <div class="text-[10px] font-code text-[var(--accent-warning, #f59e0b)] uppercase tracking-wider font-bold">
+              HITL SECURITY GATE // ACTION REQUIRED
+            </div>
+            <h3 class="text-lg font-hud font-bold text-[var(--text-primary)]">
+              AUTHORIZE HARDWARE ACCESS
+            </h3>
+          </div>
+        </div>
+
+        <div class="text-xs font-code space-y-2 text-[var(--text-secondary)]">
+          <p>
+            Agent <span class="text-[var(--accent-primary)] font-bold">{pendingApproval.agent_name}</span> is requesting permission to execute tool:
+          </p>
+          <div class="bg-[var(--bg-elevated)] p-3 border border-[var(--border-color)] rounded-sm space-y-1">
+            <div class="text-[var(--accent-primary)] font-bold">{pendingApproval.tool_name}</div>
+            <div class="text-[11px] text-[var(--text-muted)] break-all font-mono">
+              {JSON.stringify(pendingApproval.tool_args, null, 2)}
+            </div>
+          </div>
+          <p class="text-[11px] text-[var(--text-muted)] italic">
+            Authorizing will grant write permission to persist the file onto your local disk / workspace.
+          </p>
+        </div>
+
+        <div class="flex items-center justify-end gap-3 pt-3 border-t border-[var(--border-color)]">
+          <CyberButton variant="danger" onclick={() => handleApproval(false)}>
+            [REJECT & ABORT]
+          </CyberButton>
+          <CyberButton variant="primary" onclick={() => handleApproval(true)}>
+            [AUTHORIZE WRITE]
+          </CyberButton>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
