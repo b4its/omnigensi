@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Optional
 from sqlalchemy import String, Boolean, DateTime, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -18,6 +19,8 @@ class LLMProvider(Base):
     api_key_encrypted: Mapped[str] = mapped_column(String, nullable=False)
     default_headers: Mapped[dict] = mapped_column(JSONB, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Model preselected for new agents built on this provider.
+    default_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -27,4 +30,8 @@ class LLMProvider(Base):
 
     agents: Mapped[list["AgentTemplate"]] = relationship(
         "AgentTemplate", back_populates="provider", cascade="all, delete-orphan"
+    )
+
+    models: Mapped[list["ProviderModel"]] = relationship(
+        "ProviderModel", back_populates="provider", cascade="all, delete-orphan"
     )

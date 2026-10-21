@@ -14,6 +14,11 @@ class ProviderBase(BaseModel):
     base_url: str = Field(..., max_length=255)
     default_headers: Dict[str, Any] = Field(default_factory=dict)
     is_active: bool = True
+    default_model: Optional[str] = Field(
+        default=None,
+        max_length=255,
+        description="Preselected chat model for agents built on this provider",
+    )
 
 
 class ProviderCreate(ProviderBase):
@@ -27,6 +32,7 @@ class ProviderUpdate(BaseModel):
     api_key: Optional[str] = None
     default_headers: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
+    default_model: Optional[str] = Field(default=None, max_length=255)
 
 
 class ProviderResponse(ProviderBase):
@@ -44,3 +50,73 @@ class ModelInfo(BaseModel):
     context_length: Optional[int] = None
     description: Optional[str] = None
     pricing: Optional[Dict[str, Any]] = None
+
+
+class ProviderModelResponse(BaseModel):
+    """A chat model stored for a provider."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    provider_id: uuid.UUID
+    model_id: str
+    display_name: Optional[str] = None
+    context_length: Optional[int] = None
+    description: Optional[str] = None
+    pricing: Dict[str, Any] = Field(default_factory=dict)
+    is_default: bool = False
+    is_available: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+
+class ModelSyncResult(BaseModel):
+    """Outcome of the "auto-add models" operation."""
+
+    ok: bool
+    provider_id: uuid.UUID
+    discovered: int = Field(ge=0, description="Models reported by the provider")
+    added: int = Field(ge=0)
+    updated: int = Field(ge=0)
+    marked_unavailable: int = Field(ge=0)
+    total_stored: int = Field(ge=0)
+    checked_url: Optional[str] = None
+    latency_ms: int = 0
+    error: Optional[str] = None
+
+
+class SetDefaultModelRequest(BaseModel):
+    """Selects which stored model is the provider default."""
+
+    model_id: str = Field(..., min_length=1, max_length=255)
+
+
+class ChatTestRequest(BaseModel):
+    """Payload for testing a real chat completion."""
+
+    model_id: Optional[str] = Field(
+        default=None,
+        description="Model to test; falls back to the provider default",
+        max_length=255,
+    )
+    prompt: str = Field(
+        default="Reply with the single word: OK",
+        min_length=1,
+        max_length=2000,
+        description="Prompt sent to the model",
+    )
+    max_tokens: int = Field(default=64, ge=1, le=512)
+
+
+class ChatTestResult(BaseModel):
+    """Result of a chat completion probe."""
+
+    ok: bool
+    model_id: str
+    response_text: Optional[str] = None
+    latency_ms: int = 0
+    status_code: Optional[int] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    checked_url: Optional[str] = None
+    error: Optional[str] = None

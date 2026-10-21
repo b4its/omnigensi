@@ -10,12 +10,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import Pagination
 from app.core.database import get_db
 from app.core.security import encrypt_api_key, decrypt_api_key
+from app.engine.provider_probe import discover_models, probe_chat
 from app.models.provider import LLMProvider
+from app.models.provider_model import ProviderModel
 from app.schemas.provider import (
+    ChatTestRequest,
+    ChatTestResult,
+    ModelInfo,
+    ModelSyncResult,
     ProviderCreate,
     ProviderUpdate,
+    ProviderModelResponse,
     ProviderResponse,
-    ModelInfo,
+    SetDefaultModelRequest,
 )
 
 router = APIRouter(prefix="/providers", tags=["LLM Providers"])
@@ -39,8 +46,15 @@ class ProviderTestResult(BaseModel):
 
 @router.post("", response_model=ProviderResponse, status_code=status.HTTP_201_CREATED)
 async def create_provider(
-    payload: ProviderCreate, db: AsyncSession = Depends(get_db)
+    payload: ProviderCreate,
+    auto_sync_models: bool = False,
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
+    """Registers a provider.
+
+    Set ``auto_sync_models=true`` to immediately discover and store the
+    provider's models so an operator can pick one straight away.
+    """
     encrypted_key = encrypt_api_key(payload.api_key)
     provider = LLMProvider(
         name=payload.name,
@@ -49,10 +63,17 @@ async def create_provider(
         api_key_encrypted=encrypted_key,
         default_headers=payload.default_headers,
         is_active=payload.is_active,
+        default_model=payload.default_model,
     )
     db.add(provider)
     await db.commit()
     await db.refresh(provider)
+
+    if auto_sync_models:
+        await _sync_provider_models(db, provider)
+        # The sync commits internally, which expires `provider`; re-load it so
+        # the response reflects the auto-selected default model.
+        await db.refresh(provider)
     return ProviderResponse(
         id=provider.id,
         name=provider.name,
@@ -63,6 +84,7 @@ async def create_provider(
         created_at=provider.created_at,
         updated_at=provider.updated_at,
         has_api_key=bool(payload.api_key),
+        default_model=provider.default_model,
     )
 
 
@@ -94,6 +116,7 @@ async def list_providers(
             created_at=p.created_at,
             updated_at=p.updated_at,
             has_api_key=bool(p.api_key_encrypted),
+            default_model=p.default_model,
         )
         for p in providers
     ]
@@ -116,6 +139,7 @@ async def get_provider(
         created_at=provider.created_at,
         updated_at=provider.updated_at,
         has_api_key=bool(provider.api_key_encrypted),
+        default_model=provider.default_model,
     )
 
 
@@ -141,6 +165,8 @@ async def update_provider(
         provider.default_headers = payload.default_headers
     if payload.is_active is not None:
         provider.is_active = payload.is_active
+    if payload.default_model is not None:
+        provider.default_model = payload.default_model
 
     await db.commit()
     await db.refresh(provider)
@@ -154,6 +180,7 @@ async def update_provider(
         created_at=provider.created_at,
         updated_at=provider.updated_at,
         has_api_key=bool(provider.api_key_encrypted),
+        default_model=provider.default_model,
     )
 
 
@@ -172,91 +199,236 @@ async def delete_provider(
 async def fetch_provider_models(
     provider_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 ) -> Any:
+    """Live model discovery.
+
+    When the provider cannot be reached this returns the models stored by the
+    last successful sync instead of inventing a canned list, so the picker
+    keeps working without ever pretending a dead key succeeded.
+    """
     provider = await db.get(LLMProvider, provider_id)
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
 
-    raw_key = decrypt_api_key(provider.api_key_encrypted)
-    headers = {"Authorization": f"Bearer {raw_key}"} if raw_key else {}
-    if provider.default_headers:
-        headers.update({str(k): str(v) for k, v in provider.default_headers.items()})
+    discovery = await discover_models(
+        provider.base_url,
+        decrypt_api_key(provider.api_key_encrypted),
+        provider.default_headers,
+    )
+    if discovery.ok:
+        return [
+            ModelInfo(
+                id=m["model_id"],
+                name=m.get("display_name"),
+                context_length=m.get("context_length"),
+                description=m.get("description"),
+                pricing=m.get("pricing") or None,
+            )
+            for m in discovery.models
+        ]
 
-    base_url = provider.base_url.rstrip("/")
-    candidates = []
-    if base_url.endswith("/v1") or base_url.endswith("/api/v1"):
-        candidates.append(f"{base_url}/models")
-    else:
-        candidates.append(f"{base_url}/v1/models")
-        candidates.append(f"{base_url}/models")
-        candidates.append(f"{base_url}/api/tags")  # Ollama native
+    stored = await _stored_models(db, provider_id)
+    return [
+        ModelInfo(
+            id=m.model_id,
+            name=m.display_name,
+            context_length=m.context_length,
+            description=m.description,
+            pricing=m.pricing or None,
+        )
+        for m in stored
+    ]
 
-    models: List[ModelInfo] = []
-    last_error = ""
 
-    async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
-        for url in candidates:
-            try:
-                resp = await client.get(url, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # Standard OpenAI format: {"data": [{"id": "...", ...}]}
-                    if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
-                        for m in data["data"]:
-                            m_id = m.get("id") or m.get("name", "unknown")
-                            models.append(
-                                ModelInfo(
-                                    id=m_id,
-                                    name=m.get("name", m_id),
-                                    context_length=m.get("context_length"),
-                                    description=m.get("description"),
-                                    pricing=m.get("pricing"),
-                                )
-                            )
-                        break
-                    # Ollama format: {"models": [{"name": "...", "model": "..."}]}
-                    elif isinstance(data, dict) and "models" in data and isinstance(data["models"], list):
-                        for m in data["models"]:
-                            m_name = m.get("model") or m.get("name", "unknown")
-                            models.append(
-                                ModelInfo(
-                                    id=m_name,
-                                    name=m_name,
-                                    description=f"Format: {m.get('details', {}).get('format', 'ollama')}",
-                                )
-                            )
-                        break
-            except Exception as e:
-                last_error = str(e)
+async def _stored_models(db: AsyncSession, provider_id: uuid.UUID) -> List[ProviderModel]:
+    result = await db.execute(
+        select(ProviderModel)
+        .where(ProviderModel.provider_id == provider_id)
+        .order_by(ProviderModel.is_default.desc(), ProviderModel.model_id.asc())
+    )
+    return list(result.scalars().all())
 
-    # If provider failed to return models or local mock fallback
-    if not models:
-        # Provide common fallback models based on provider_type
-        if provider.provider_type.lower() == "openrouter":
-            models = [
-                ModelInfo(id="meta-llama/llama-3.3-70b-instruct", name="Llama 3.3 70B Instruct"),
-                ModelInfo(id="anthropic/claude-3.5-sonnet", name="Claude 3.5 Sonnet"),
-                ModelInfo(id="openai/gpt-4o", name="GPT-4o"),
-                ModelInfo(id="google/gemini-2.0-flash-exp:free", name="Gemini 2.0 Flash (Free)"),
-                ModelInfo(id="deepseek/deepseek-chat", name="DeepSeek V3"),
-            ]
-        elif provider.provider_type.lower() == "openai":
-            models = [
-                ModelInfo(id="gpt-4o", name="GPT-4o"),
-                ModelInfo(id="gpt-4o-mini", name="GPT-4o Mini"),
-                ModelInfo(id="o1-preview", name="o1 Preview"),
-            ]
-        elif provider.provider_type.lower() == "ollama":
-            models = [
-                ModelInfo(id="llama3.2:latest", name="Llama 3.2 (Local)"),
-                ModelInfo(id="qwen2.5-coder:7b", name="Qwen 2.5 Coder 7B (Local)"),
-                ModelInfo(id="deepseek-r1:8b", name="DeepSeek R1 8B (Local)"),
-            ]
+
+async def _sync_provider_models(
+    db: AsyncSession, provider: LLMProvider
+) -> ModelSyncResult:
+    """Upsert the provider's models and flag the ones that disappeared.
+
+    Rows are never deleted: an agent may already reference a model, and a
+    transient outage should not destroy the operator's selection.
+    """
+    discovery = await discover_models(
+        provider.base_url,
+        decrypt_api_key(provider.api_key_encrypted),
+        provider.default_headers,
+    )
+    if not discovery.ok:
+        return ModelSyncResult(
+            ok=False,
+            provider_id=provider.id,
+            discovered=0,
+            added=0,
+            updated=0,
+            marked_unavailable=0,
+            total_stored=len(await _stored_models(db, provider.id)),
+            checked_url=discovery.checked_url,
+            latency_ms=discovery.latency_ms,
+            error=discovery.error,
+        )
+
+    existing = {m.model_id: m for m in await _stored_models(db, provider.id)}
+    seen: set[str] = set()
+    added = updated = 0
+
+    for entry in discovery.models:
+        model_id = entry["model_id"]
+        seen.add(model_id)
+        row = existing.get(model_id)
+        if row is None:
+            db.add(
+                ProviderModel(
+                    provider_id=provider.id,
+                    model_id=model_id,
+                    display_name=entry.get("display_name"),
+                    context_length=entry.get("context_length"),
+                    description=entry.get("description"),
+                    pricing=entry.get("pricing") or {},
+                    is_available=True,
+                )
+            )
+            added += 1
         else:
-            models = [
-                ModelInfo(id="default-model", name="Default Model (Check Connection)"),
-            ]
+            row.display_name = entry.get("display_name") or row.display_name
+            row.context_length = entry.get("context_length") or row.context_length
+            row.description = entry.get("description") or row.description
+            row.pricing = entry.get("pricing") or row.pricing
+            row.is_available = True
+            updated += 1
 
-    return models
+    marked = 0
+    for model_id, row in existing.items():
+        if model_id not in seen and row.is_available:
+            row.is_available = False
+            marked += 1
+
+    await db.commit()
+
+    stored = await _stored_models(db, provider.id)
+    # Adopt a default automatically so the picker is never empty.
+    if not any(m.is_default for m in stored) and stored:
+        available = [m for m in stored if m.is_available]
+        pick = available[0] if available else stored[0]
+        pick.is_default = True
+        provider.default_model = pick.model_id
+        await db.commit()
+        stored = await _stored_models(db, provider.id)
+
+    return ModelSyncResult(
+        ok=True,
+        provider_id=provider.id,
+        discovered=len(discovery.models),
+        added=added,
+        updated=updated,
+        marked_unavailable=marked,
+        total_stored=len(stored),
+        checked_url=discovery.checked_url,
+        latency_ms=discovery.latency_ms,
+    )
+
+
+@router.get("/{provider_id}/model-registry", response_model=List[ProviderModelResponse])
+async def list_provider_models(
+    provider_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Any:
+    """Models previously stored for this provider (no live call)."""
+    provider = await db.get(LLMProvider, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    return await _stored_models(db, provider_id)
+
+
+@router.post("/{provider_id}/models/sync", response_model=ModelSyncResult)
+async def sync_provider_models(
+    provider_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Any:
+    """Auto-add every model the provider reports, keeping existing rows."""
+    provider = await db.get(LLMProvider, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    return await _sync_provider_models(db, provider)
+
+
+@router.put(
+    "/{provider_id}/default-model", response_model=ProviderModelResponse
+)
+async def set_default_model(
+    provider_id: uuid.UUID,
+    payload: SetDefaultModelRequest,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Selects which stored model this provider should use by default."""
+    provider = await db.get(LLMProvider, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    stored = await _stored_models(db, provider_id)
+    target = next((m for m in stored if m.model_id == payload.model_id), None)
+    if target is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{payload.model_id}' is not registered for this provider. Run a model sync first.",
+        )
+
+    for row in stored:
+        row.is_default = row.model_id == payload.model_id
+    provider.default_model = payload.model_id
+    await db.commit()
+    await db.refresh(target)
+    return target
+
+
+@router.post("/{provider_id}/chat-test", response_model=ChatTestResult)
+async def chat_test_provider(
+    provider_id: uuid.UUID,
+    payload: ChatTestRequest,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Runs a real completion so the operator can see an actual response.
+
+    Unlike ``/test`` (which only lists models) this proves the key, the
+    selected model and the routing all work, and returns the reply text.
+    """
+    provider = await db.get(LLMProvider, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    model_id = payload.model_id or provider.default_model
+    if not model_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No model selected. Sync models and choose a default first.",
+        )
+
+    probe = await probe_chat(
+        base_url=provider.base_url,
+        api_key=decrypt_api_key(provider.api_key_encrypted),
+        model_id=model_id,
+        prompt=payload.prompt,
+        provider_type=provider.provider_type,
+        default_headers=provider.default_headers,
+        max_tokens=payload.max_tokens,
+    )
+
+    return ChatTestResult(
+        ok=probe.ok,
+        model_id=probe.model_id,
+        response_text=probe.response_text,
+        latency_ms=probe.latency_ms,
+        status_code=probe.status_code,
+        prompt_tokens=probe.prompt_tokens,
+        completion_tokens=probe.completion_tokens,
+        checked_url=probe.checked_url,
+        error=probe.error,
+    )
 
 
 @router.post("/{provider_id}/test", response_model=ProviderTestResult)
