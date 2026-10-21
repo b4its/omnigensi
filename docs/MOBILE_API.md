@@ -135,7 +135,7 @@ Applies to: `/providers`, `/agents`, `/workflows`, `/executions`.
 | Agents | `GET/POST /agents`, `GET/PUT/DELETE /agents/{id}` |
 | Workflows | `GET/POST /workflows`, `GET/PUT/DELETE /workflows/{id}` |
 | Tools | `GET /tools` |
-| MCP | `GET/POST /mcp/servers`, `GET /mcp/servers/{name}/tools`, `POST /mcp/servers/{name}/tools/{tool}/execute` |
+| MCP | `GET/POST /mcp/servers`, `PUT/PATCH/DELETE /mcp/servers/{name}`, `GET /mcp/servers/{name}/tools`, `POST /mcp/servers/{name}/tools/{tool}/execute` |
 | Files | `GET /files/{path}` |
 
 ### Provider update semantics
@@ -143,6 +143,36 @@ Applies to: `/providers`, `/agents`, `/workflows`, `/executions`.
 `PUT /providers/{id}` is a partial update. **Omit `api_key`** to keep the stored
 key; send it only when rotating. `has_api_key` reports whether a key exists —
 the key itself is never returned.
+
+### MCP server management
+
+MCP servers are added, edited, enabled/disabled and removed at runtime. All
+mutations are held **in memory**, so they are lost when the backend restarts.
+
+| Operation | Request | Result |
+|---|---|---|
+| Add | `POST /mcp/servers` | `201` with the stored config; `409 conflict` if the name exists |
+| Edit | `PUT /mcp/servers/{name}` | `200` with the updated config (partial update) |
+| Enable/disable | `PATCH /mcp/servers/{name}` `{"enabled": false}` | `200`; keeps the configuration |
+| Remove | `DELETE /mcp/servers/{name}` | `204`; drops the config and cached tools |
+
+Rules clients should mirror in their UI:
+
+- `name` is immutable. Renaming requires delete + re-add.
+- `server_type` must be `stdio` or `sse`, and the matching field is required:
+  `command` for stdio, `url` for sse. Otherwise the API returns
+  `400 bad_request`.
+- A disabled server keeps its card but refuses tool discovery and execution
+  with `409 conflict`. Disable the Discover/Execute affordances accordingly.
+- Changing the transport invalidates previously discovered tools, so always
+  re-discover after an edit.
+- Built-in bridges (`filesystem-mcp`, `memory-mcp`) are re-created on boot;
+  deleting them only removes them for the current process lifetime.
+
+```json
+// PATCH /api/v1/mcp/servers/postgres-mcp
+{ "enabled": false }
+```
 
 ### MCP tool execution
 
@@ -256,7 +286,8 @@ instead of writing to the device filesystem.
 | Execute + SSE telemetry | ✅ | ✅ | implement SSE manually |
 | Cancel execution | ✅ | ✅ | ✅ |
 | HITL tool approval | ✅ | ✅ | ✅ |
-| MCP list/register/tools | ✅ | ✅ | ✅ |
+| MCP list/add/edit/toggle/remove | ✅ | ✅ | ✅ |
+| MCP tool discovery & execution | ✅ | ✅ | ✅ |
 | Artifact download | ✅ (browser) | ✅ | **use `/files`** |
 | Local disk write | Chromium only | n/a | not supported by design |
 | Pagination | ✅ | ✅ | ✅ |

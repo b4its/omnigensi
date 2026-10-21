@@ -283,3 +283,170 @@ async def test_sanitize_workspace_path_blocks_sibling_prefix(tmp_path, monkeypat
 
     with pytest.raises(ValueError):
         security.sanitize_workspace_path(str(sibling / "secret.txt"))
+
+
+# ---------------------------------------------------------------------------
+# MCP server management (add / remove / toggle / edit)
+# ---------------------------------------------------------------------------
+
+def _mcp_payload(name: str = "contract-mcp", **overrides):
+    payload = {
+        "name": name,
+        "server_type": "stdio",
+        "command": "python",
+        "args": ["-c", "print(1)"],
+        "description": "contract test server",
+        "enabled": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_full_lifecycle():
+    """Add -> toggle -> edit -> remove, verifying each step's state."""
+    name = "lifecycle-mcp"
+    async with _client() as client:
+        try:
+            # ADD
+            created = await client.post("/api/v1/mcp/servers", json=_mcp_payload(name))
+            assert created.status_code == 201
+            assert created.json()["name"] == name
+            assert created.json()["enabled"] is True
+
+            names = [s["name"] for s in (await client.get("/api/v1/mcp/servers")).json()]
+            assert name in names
+
+            # DUPLICATE -> 409
+            duplicate = await client.post("/api/v1/mcp/servers", json=_mcp_payload(name))
+            assert duplicate.status_code == 409
+            assert duplicate.json()["code"] == "conflict"
+
+            # DISABLE
+            off = await client.patch(
+                f"/api/v1/mcp/servers/{name}", json={"enabled": False}
+            )
+            assert off.status_code == 200
+            assert off.json()["enabled"] is False
+
+            # Disabled servers refuse discovery and execution
+            assert (
+                await client.get(f"/api/v1/mcp/servers/{name}/tools")
+            ).status_code == 409
+            assert (
+                await client.post(
+                    f"/api/v1/mcp/servers/{name}/tools/whatever/execute",
+                    json={"arguments": {}},
+                )
+            ).status_code == 409
+
+            # RE-ENABLE
+            on = await client.patch(
+                f"/api/v1/mcp/servers/{name}", json={"enabled": True}
+            )
+            assert on.json()["enabled"] is True
+
+            # EDIT (partial: only description changes)
+            edited = await client.put(
+                f"/api/v1/mcp/servers/{name}", json={"description": "edited server"}
+            )
+            assert edited.status_code == 200
+            assert edited.json()["description"] == "edited server"
+            assert edited.json()["command"] == "python"
+            assert edited.json()["args"] == ["-c", "print(1)"]
+
+            # REMOVE
+            removed = await client.delete(f"/api/v1/mcp/servers/{name}")
+            assert removed.status_code == 204
+            names = [s["name"] for s in (await client.get("/api/v1/mcp/servers")).json()]
+            assert name not in names
+
+            # REMOVE again -> 404
+            again = await client.delete(f"/api/v1/mcp/servers/{name}")
+            assert again.status_code == 404
+            assert again.json()["code"] == "not_found"
+        finally:
+            await client.delete(f"/api/v1/mcp/servers/{name}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload, detail_fragment",
+    [
+        ({"name": "no-command", "server_type": "stdio"}, "command is required"),
+        ({"name": "no-url", "server_type": "sse"}, "url is required"),
+        ({"name": "bad-type", "server_type": "carrier-pigeon"}, "stdio' or 'sse"),
+    ],
+)
+async def test_mcp_server_rejects_invalid_transport(payload, detail_fragment):
+    async with _client() as client:
+        resp = await client.post("/api/v1/mcp/servers", json=payload)
+        assert resp.status_code == 400
+        assert detail_fragment in resp.json()["detail"]
+        # Nothing must have been persisted on failure
+        names = [s["name"] for s in (await client.get("/api/v1/mcp/servers")).json()]
+        assert payload["name"] not in names
+
+
+@pytest.mark.asyncio
+async def test_mcp_update_can_switch_transport():
+    """Switching stdio -> sse must invalidate the previously cached tools."""
+    name = "transport-switch-mcp"
+    async with _client() as client:
+        try:
+            await client.post("/api/v1/mcp/servers", json=_mcp_payload(name))
+            # Prime the tool cache
+            await client.get(f"/api/v1/mcp/servers/{name}/tools")
+
+            switched = await client.put(
+                f"/api/v1/mcp/servers/{name}",
+                json={
+                    "server_type": "sse",
+                    "url": "http://localhost:9000/sse",
+                    "command": None,
+                    "args": [],
+                },
+            )
+            assert switched.status_code == 200
+            body = switched.json()
+            assert body["server_type"] == "sse"
+            assert body["url"] == "http://localhost:9000/sse"
+
+            # The server must still be usable after the transport change
+            assert (
+                await client.get(f"/api/v1/mcp/servers/{name}/tools")
+            ).status_code == 200
+        finally:
+            await client.delete(f"/api/v1/mcp/servers/{name}")
+
+
+@pytest.mark.asyncio
+async def test_mcp_remove_does_not_touch_seed_servers():
+    """Removing a user server must leave the built-in bridges intact."""
+    async with _client() as client:
+        await client.post("/api/v1/mcp/servers", json=_mcp_payload("temp-mcp"))
+        assert (await client.delete("/api/v1/mcp/servers/temp-mcp")).status_code == 204
+
+        names = [s["name"] for s in (await client.get("/api/v1/mcp/servers")).json()]
+        assert "filesystem-mcp" in names
+        assert "memory-mcp" in names
+
+
+def test_mcp_manager_unregister_invalidates_cache():
+    """The manager must drop cached tools when a server disappears."""
+    from app.engine.mcp_bridge import MCPBridgeManager, MCPServerConfig
+
+    manager = MCPBridgeManager()
+    manager.register_server(
+        MCPServerConfig(name="cache-probe", server_type="stdio", command="echo")
+    )
+    manager._tools_cache["cache-probe"] = [{"name": "probe:tool"}]
+    manager._langchain_tools["cache-probe:tool"] = object()
+
+    assert manager.unregister_server("cache-probe") is True
+    assert manager.get_server("cache-probe") is None
+    assert "cache-probe" not in manager._tools_cache
+    assert "cache-probe:tool" not in manager._langchain_tools
+
+    # Unregistering an unknown server is a no-op, not an error
+    assert manager.unregister_server("cache-probe") is False
