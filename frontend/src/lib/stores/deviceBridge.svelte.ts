@@ -54,10 +54,43 @@ class DeviceBridgeStore {
 
   async saveAgentFileToDevice(
     filename: string,
-    base64Data: string,
-    mimeType: string = 'application/octet-stream'
+    base64Data: string | undefined | null,
+    mimeType: string = 'application/octet-stream',
+    fallbackPath?: string
   ): Promise<{ success: boolean; mode: string; filename: string }> {
     if (!browser) return { success: false, mode: 'none', filename };
+
+    // No inline payload available: point the browser at the backend download
+    // endpoint instead. This is the only path that works on mobile browsers.
+    if (!base64Data) {
+      const path = fallbackPath || filename;
+      try {
+        const a = document.createElement('a');
+        a.href = `/api/v1/files/${path.split('/').map(encodeURIComponent).join('/')}`;
+        a.download = filename;
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        this.writeHistory.unshift({
+          filename,
+          timestamp: new Date().toLocaleTimeString(),
+          status: 'DOWNLOADED_FALLBACK',
+          mimeType,
+          message: 'Saved via backend download endpoint',
+        });
+        return { success: true, mode: 'server_download', filename };
+      } catch (err: any) {
+        this.writeHistory.unshift({
+          filename,
+          timestamp: new Date().toLocaleTimeString(),
+          status: 'ERROR',
+          message: String(err),
+        });
+        return { success: false, mode: 'error', filename };
+      }
+    }
 
     const byteCharacters = atob(base64Data);
     const byteNumbers = new Array(byteCharacters.length);

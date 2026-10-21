@@ -641,16 +641,21 @@
 
                 <div class="flex items-center justify-between text-[10px] text-[var(--text-muted)]">
                   <span>{file.size_bytes} bytes</span>
-                  {#if file.content_base64}
-                    <button
-                      type="button"
-                      onclick={() => deviceBridge.saveAgentFileToDevice(file.filename, file.content_base64, file.mime_type)}
-                      class="text-[var(--accent-primary)] hover:underline flex items-center gap-0.5"
-                    >
-                      <Download class="w-3 h-3" />
-                      Save Copy
-                    </button>
-                  {/if}
+                  <button
+                    type="button"
+                    onclick={() =>
+                      deviceBridge.saveAgentFileToDevice(
+                        file.filename,
+                        file.content_base64,
+                        file.mime_type,
+                        file.filepath || file.filename
+                      )}
+                    class="p-1 text-[var(--accent-primary)] hover:underline flex items-center gap-0.5"
+                    aria-label={`Save ${file.filename}`}
+                  >
+                    <Download class="w-3.5 h-3.5" />
+                    Save Copy
+                  </button>
                 </div>
               </div>
             {/each}
