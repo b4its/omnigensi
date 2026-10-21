@@ -21,6 +21,7 @@
     Cpu,
     Sparkles,
     ShieldAlert,
+    Square,
   } from 'lucide-svelte';
 
   let workflows = $state<any[]>([]);
@@ -45,6 +46,7 @@
   );
 
   let isExecuting = $state<boolean>(false);
+  let isCancelling = $state<boolean>(false);
   let activeExecutionId = $state<string | null>(null);
   let activeNodeId = $state<string | null>(null);
   let activeAgentName = $state<string>('');
@@ -319,6 +321,39 @@
     }
   }
 
+  async function handleCancel() {
+    if (!activeExecutionId || isCancelling) return;
+    isCancelling = true;
+    try {
+      await api.cancelExecution(activeExecutionId);
+      terminalLogs = [
+        ...terminalLogs,
+        {
+          type: 'error',
+          message: '[OPERATOR ABORT]: Execution cancel signal dispatched. Halting pipeline...',
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ];
+      // Optimistically stop streaming; backend broadcasts workflow_failed too.
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+      isExecuting = false;
+    } catch (e: any) {
+      terminalLogs = [
+        ...terminalLogs,
+        {
+          type: 'error',
+          message: `[ABORT FAILED]: ${e?.message ?? 'Unknown error'}`,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ];
+    } finally {
+      isCancelling = false;
+    }
+  }
+
   async function handleExecute() {
     if (!selectedWorkflowId || !taskPrompt.trim()) return;
 
@@ -443,6 +478,19 @@
             <Play class="w-4 h-4 fill-current" />
             <span>{isExecuting ? 'EXECUTION IN PROGRESS...' : 'DISPATCH AGENT PIPELINE'}</span>
           </CyberButton>
+
+          <!-- Abort Control (only while a run is live) -->
+          {#if isExecuting && activeExecutionId}
+            <CyberButton
+              variant="danger"
+              class="w-full py-2.5"
+              disabled={isCancelling}
+              onclick={handleCancel}
+            >
+              <Square class="w-3.5 h-3.5 fill-current" />
+              <span>{isCancelling ? 'ABORTING...' : 'ABORT EXECUTION'}</span>
+            </CyberButton>
+          {/if}
 
           <!-- Telemetry Quick Numbers -->
           {#if activeExecutionId}
