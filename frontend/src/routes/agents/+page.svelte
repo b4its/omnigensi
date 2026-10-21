@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
+  import { notify } from '$lib/stores/notify.svelte';
   import CyberCard from '$lib/components/ui/CyberCard.svelte';
   import CyberButton from '$lib/components/ui/CyberButton.svelte';
   import {
@@ -177,12 +178,17 @@
   }
 
   async function handleDeleteAgent(id: string, name: string) {
-    if (!confirm(`Are you sure you want to delete agent '${name}'?`)) return;
+    const confirmed = await notify.confirm({
+      title: 'DELETE AGENT',
+      message: `Delete agent '${name}'? This cannot be undone.`,
+      confirmLabel: 'DELETE',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteAgent(id);
       await loadData();
     } catch (err: any) {
-      alert(`Delete error: ${err.message}`);
+      notify.fromError(err, "Delete failed");
     }
   }
 </script>

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { api } from '$lib/api';
+  import { notify } from '$lib/stores/notify.svelte';
   import { deviceBridge } from '$lib/stores/deviceBridge.svelte';
   import CyberCard from '$lib/components/ui/CyberCard.svelte';
   import CyberButton from '$lib/components/ui/CyberButton.svelte';
@@ -50,7 +51,7 @@
     if (!quickTask.trim()) return;
     const targetWorkflow = workflows[0];
     if (!targetWorkflow) {
-      alert("No workflow found! Please assemble a workflow first.");
+      notify.warning("No workflow found. Assemble a workflow in Graph Builder first.");
       return;
     }
 
@@ -59,7 +60,7 @@
       const res = await api.executeWorkflow(targetWorkflow.id, quickTask);
       goto(`/playground?execution_id=${res.id}`);
     } catch (err: any) {
-      alert(`Launch error: ${err.message}`);
+      notify.fromError(err, "Launch failed");
     } finally {
       launching = false;
     }

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { api } from '$lib/api';
+  import { notify } from '$lib/stores/notify.svelte';
   import CyberCard from '$lib/components/ui/CyberCard.svelte';
   import CyberButton from '$lib/components/ui/CyberButton.svelte';
   import AgentNode from '$lib/components/workflow/AgentNode.svelte';
@@ -126,7 +127,7 @@
 
   async function handleSaveWorkflow() {
     if (!wfName.trim() || pipelineNodes.length === 0) {
-      alert('Please provide a workflow name and at least one node.');
+      notify.warning('Provide a workflow name and at least one step.');
       return;
     }
 
@@ -183,21 +184,26 @@
       }
 
       await loadData();
-      alert('Workflow persisted to graph compiler registry successfully!');
+      notify.success('Workflow saved to the graph compiler registry.');
     } catch (err: any) {
-      alert(`Save error: ${err.message}`);
+      notify.fromError(err, "Save failed");
     } finally {
       isSaving = false;
     }
   }
 
   async function handleDeleteWorkflow(id: string) {
-    if (!confirm('Are you sure you want to delete this workflow?')) return;
+    const confirmed = await notify.confirm({
+      title: 'DELETE WORKFLOW',
+      message: 'Delete this workflow blueprint? This cannot be undone.',
+      confirmLabel: 'DELETE',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteWorkflow(id);
       await loadData();
     } catch (err: any) {
-      alert(`Delete error: ${err.message}`);
+      notify.fromError(err, "Delete failed");
     }
   }
 

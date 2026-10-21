@@ -1,3 +1,5 @@
+import { notify } from './notify.svelte';
+
 const browser = typeof window !== 'undefined';
 
 export interface DeviceFileRecord {
@@ -25,7 +27,9 @@ class DeviceBridgeStore {
   async mountLocalDirectory(): Promise<boolean> {
     if (!browser) return false;
     if (!this.isSupported) {
-      alert("Browser does not support File System Access API. Standard file download will be used instead.");
+      notify.warning(
+        "Direct disk write is unavailable in this browser. Files will download to your device instead."
+      );
       return false;
     }
 

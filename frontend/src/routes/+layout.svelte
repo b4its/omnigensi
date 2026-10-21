@@ -6,6 +6,7 @@
   import { deviceBridge } from '$lib/stores/deviceBridge.svelte';
   import { api } from '$lib/api';
   import ThemeToggle from '$lib/components/ui/ThemeToggle.svelte';
+  import NotifyHost from '$lib/components/ui/NotifyHost.svelte';
   import {
     Activity,
     Server,
@@ -227,4 +228,7 @@
       {@render children()}
     </main>
   </div>
+
+  <!-- Global toast + confirmation layer (replaces alert/confirm) -->
+  <NotifyHost />
 </div>

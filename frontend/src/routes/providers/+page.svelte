@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
+  import { notify } from '$lib/stores/notify.svelte';
   import CyberCard from '$lib/components/ui/CyberCard.svelte';
   import CyberButton from '$lib/components/ui/CyberButton.svelte';
   import {
@@ -78,7 +79,7 @@
         tools: res.tools || [],
       };
     } catch (e: any) {
-      alert(`Failed to fetch MCP tools: ${e.message}`);
+      notify.fromError(e, "Failed to fetch MCP tools");
     } finally {
       mcpLoading[server.name] = false;
     }
@@ -157,22 +158,25 @@
       await api.toggleMCPServer(server.name, !server.enabled);
       await loadProviders();
     } catch (err: any) {
-      alert(`Toggle failed: ${err.message}`);
+      notify.fromError(err, "Toggle failed");
     } finally {
       mcpBusy[server.name] = false;
     }
   }
 
   async function handleDeleteMcp(server: any) {
-    if (!confirm(`Remove MCP server '${server.name}'? Its configuration and cached tools will be dropped.`)) {
-      return;
-    }
+    const confirmed = await notify.confirm({
+      title: 'REMOVE MCP SERVER',
+      message: `Remove MCP server '${server.name}'? Its configuration and cached tools will be dropped.`,
+      confirmLabel: 'REMOVE',
+    });
+    if (!confirmed) return;
     mcpBusy[server.name] = true;
     try {
       await api.deleteMCPServer(server.name);
       await loadProviders();
     } catch (err: any) {
-      alert(`Delete failed: ${err.message}`);
+      notify.fromError(err, "Delete failed");
     } finally {
       mcpBusy[server.name] = false;
     }
@@ -256,17 +260,22 @@
       await api.updateProvider(provider.id, { is_active: !provider.is_active });
       await loadProviders();
     } catch (err: any) {
-      alert(`Toggle failed: ${err.message}`);
+      notify.fromError(err, "Toggle failed");
     }
   }
 
   async function handleDeleteProvider(id: string, name: string) {
-    if (!confirm(`Are you sure you want to delete provider '${name}'?`)) return;
+    const confirmed = await notify.confirm({
+      title: 'DELETE PROVIDER',
+      message: `Delete provider '${name}'? Agents using it will lose their model source.`,
+      confirmLabel: 'DELETE',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteProvider(id);
       await loadProviders();
     } catch (err: any) {
-      alert(`Delete failed: ${err.message}`);
+      notify.fromError(err, "Delete failed");
     }
   }
 
@@ -279,7 +288,7 @@
         models,
       };
     } catch (err: any) {
-      alert(`Failed to fetch models: ${err.message}`);
+      notify.fromError(err, "Failed to fetch models");
     } finally {
       syncLoading[provider.id] = false;
     }

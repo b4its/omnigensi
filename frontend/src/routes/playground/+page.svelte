@@ -3,6 +3,7 @@
   import { page } from '$app/state';
   import { marked } from 'marked';
   import { api } from '$lib/api';
+  import { notify } from '$lib/stores/notify.svelte';
   import { deviceBridge } from '$lib/stores/deviceBridge.svelte';
   import CyberCard from '$lib/components/ui/CyberCard.svelte';
   import CyberButton from '$lib/components/ui/CyberButton.svelte';
@@ -370,7 +371,7 @@
       attachToExecution(res.id);
     } catch (err: any) {
       isExecuting = false;
-      alert(`Launch error: ${err.message}`);
+      notify.fromError(err, "Launch failed");
     }
   }
 
