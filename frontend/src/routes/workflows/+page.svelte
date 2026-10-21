@@ -375,6 +375,14 @@
         REGISTERED BLUEPRINTS
       </div>
 
+      {#if workflows.length === 0}
+        <div class="border border-dashed border-[var(--border-color)] p-4 text-center chamfer-sm space-y-2">
+          <Network class="w-6 h-6 mx-auto text-[var(--text-muted)] opacity-50" />
+          <p class="text-[10px] font-code text-[var(--text-muted)]">
+            No blueprints yet. Build one and press PERSIST GRAPH BLUEPRINT.
+          </p>
+        </div>
+      {/if}
       {#each workflows as wf}
         {@const isSel = selectedWorkflow?.id === wf.id}
         <button

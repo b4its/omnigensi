@@ -610,7 +610,7 @@
   <!-- 3-Column Execution Console -->
   <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
     <!-- LEFT PANEL (4 Cols): Launch Controls & Local Hardware Bridge -->
-    <div class="lg:col-span-4 space-y-4">
+    <div class="lg:col-span-4 lg:order-1 order-2 space-y-4">
       <CyberCard code="CONTROL.01" title="WORKFLOW DISPATCHER">
         <div class="space-y-4 font-code text-xs">
           <!-- Workflow Selector -->
@@ -726,7 +726,7 @@
     </div>
 
     <!-- CENTER PANEL (5 Cols): Live Telemetry Terminal & Stepper -->
-    <div class="lg:col-span-5 space-y-4">
+    <div class="lg:col-span-5 lg:order-2 order-3 space-y-4">
       <!-- Agent Stepper Pipeline Track -->
       {#if workflowNodes.length > 0}
         <div class="border border-[var(--border-color)] bg-[var(--bg-surface)] p-3 chamfer-sm space-y-2">
@@ -804,7 +804,7 @@
     </div>
 
     <!-- RIGHT PANEL (3 Cols): Output & Device Artifacts -->
-    <div class="lg:col-span-3 space-y-4">
+    <div class="lg:col-span-3 lg:order-3 order-1 space-y-4">
       <CyberCard code="OUTPUT.03" title="ARTIFACTS & OUTPUT">
         <!-- Tab Switcher -->
         <div class="flex border-b border-[var(--border-color)] mb-3 text-xs font-hud">
