@@ -14,13 +14,19 @@
     ExternalLink,
     Search,
     Cpu,
+    Network,
+    FolderTree,
+    Terminal,
   } from 'lucide-svelte';
 
   let providers = $state<any[]>([]);
+  let mcpServers = $state<any[]>([]);
   let loading = $state<boolean>(true);
   let showCreateModal = $state<boolean>(false);
   let syncLoading = $state<Record<string, boolean>>({});
   let selectedProviderModels = $state<{ providerName: string; models: any[] } | null>(null);
+  let selectedMcpTools = $state<{ serverName: string; tools: any[] } | null>(null);
+  let mcpLoading = $state<Record<string, boolean>>({});
   let modelSearch = $state<string>('');
 
   // Form State
@@ -34,11 +40,31 @@
   async function loadProviders() {
     try {
       loading = true;
-      providers = await api.getProviders();
+      const [pr, mcp] = await Promise.all([
+        api.getProviders(),
+        api.getMCPServers().catch(() => []),
+      ]);
+      providers = pr;
+      mcpServers = mcp;
     } catch (e: any) {
       console.error(e);
     } finally {
       loading = false;
+    }
+  }
+
+  async function handleInspectMcpTools(server: any) {
+    mcpLoading[server.name] = true;
+    try {
+      const res = await api.getMCPServerTools(server.name);
+      selectedMcpTools = {
+        serverName: server.name,
+        tools: res.tools || [],
+      };
+    } catch (e: any) {
+      alert(`Failed to fetch MCP tools: ${e.message}`);
+    } finally {
+      mcpLoading[server.name] = false;
     }
   }
 
@@ -196,6 +222,74 @@
     </div>
   {/if}
 
+  <!-- MCP (Model Context Protocol) Servers Section -->
+  <div class="mt-8 space-y-4">
+    <div class="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
+      <div>
+        <div class="text-[11px] font-code text-[var(--accent-primary)] uppercase tracking-wider">
+          SUB-PROTOCOL // 02
+        </div>
+        <h2 class="text-lg font-hud font-bold text-[var(--text-primary)] flex items-center gap-2">
+          <Network class="w-5 h-5 text-[var(--accent-primary)]" />
+          MODEL CONTEXT PROTOCOL (MCP) // HOST BRIDGES
+        </h2>
+        <p class="text-xs text-[var(--text-muted)] mt-0.5">
+          Connect local MCP servers over stdio or SSE to grant agents access to host tools and graph memory.
+        </p>
+      </div>
+
+      <span class="text-xs font-code px-2.5 py-1 rounded border border-[var(--status-success)]/40 bg-[var(--status-success)]/10 text-[var(--status-success)] font-bold">
+        MCP SDK v2.3 ACTIVE
+      </span>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {#each mcpServers as server}
+        <CyberCard code="MCP.BRIDGE" title={server.name.toUpperCase()}>
+          <div class="space-y-3 font-code text-xs">
+            <div class="flex items-center justify-between">
+              <span class="text-[var(--text-muted)]">Transport:</span>
+              <span class="px-2 py-0.5 rounded uppercase font-bold text-[10px] bg-[var(--accent-primary)]/20 text-[var(--accent-primary)] border border-[var(--accent-primary)]/30">
+                {server.server_type}
+              </span>
+            </div>
+
+            <div class="p-2.5 bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-sm space-y-1">
+              <div class="text-[10px] text-[var(--text-muted)] flex items-center gap-1 font-bold">
+                <Terminal class="w-3 h-3 text-[var(--accent-primary)]" />
+                EXECUTION COMMAND:
+              </div>
+              <div class="text-[11px] text-[var(--text-primary)] font-mono truncate">
+                {server.command} {(server.args || []).join(' ')}
+              </div>
+            </div>
+
+            <p class="text-[11px] text-[var(--text-muted)] line-clamp-2">
+              {server.description || 'Model Context Protocol Server Adapter'}
+            </p>
+
+            <div class="pt-2 border-t border-[var(--border-color)]/50 flex items-center justify-between">
+              <span class="text-[10px] text-[var(--status-success)] font-bold flex items-center gap-1">
+                <span class="w-2 h-2 rounded-full bg-[var(--status-success)] inline-block"></span>
+                ACTIVE PROTOCOL
+              </span>
+
+              <button
+                type="button"
+                onclick={() => handleInspectMcpTools(server)}
+                disabled={mcpLoading[server.name]}
+                class="px-2.5 py-1 text-xs font-hud border border-[var(--accent-primary)] text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 rounded-none transition-colors flex items-center gap-1 cursor-pointer"
+              >
+                <RefreshCw class="w-3 h-3 {mcpLoading[server.name] ? 'animate-spin' : ''}" />
+                <span>{mcpLoading[server.name] ? 'INSPECTING...' : 'DISCOVER TOOLS'}</span>
+              </button>
+            </div>
+          </div>
+        </CyberCard>
+      {/each}
+    </div>
+  </div>
+
   <!-- Create Modal -->
   {#if showCreateModal}
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
@@ -343,6 +437,50 @@
                 <span class="text-[10px] text-[var(--accent-primary)] px-2 py-0.5 rounded bg-[var(--accent-primary)]/10">
                   {Math.round(model.context_length / 1000)}k ctx
                 </span>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- MCP Tools Inspection Modal -->
+  {#if selectedMcpTools}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+      <div class="w-full max-w-2xl max-h-[80vh] flex flex-col border border-[var(--accent-primary)] bg-[var(--bg-surface)] chamfer shadow-[var(--border-glow)] overflow-hidden">
+        <div class="flex items-center justify-between p-4 border-b border-[var(--border-color)] bg-[var(--bg-elevated)]/60">
+          <div>
+            <div class="font-hud font-bold text-sm text-[var(--text-primary)]">
+              DISCOVERED MCP TOOLS // {selectedMcpTools.serverName}
+            </div>
+            <div class="text-[10px] text-[var(--text-muted)] font-code">
+              {selectedMcpTools.tools.length} tools registered via Model Context Protocol
+            </div>
+          </div>
+          <button
+            type="button"
+            onclick={() => selectedMcpTools = null}
+            class="text-xs font-hud text-[var(--text-muted)] hover:text-white"
+          >
+            [CLOSE]
+          </button>
+        </div>
+
+        <div class="p-4 overflow-y-auto space-y-3 font-code text-xs">
+          {#each selectedMcpTools.tools as tool}
+            <div class="p-3 border border-[var(--border-color)] bg-[var(--bg-elevated)]/40 rounded-sm space-y-1.5">
+              <div class="flex items-center justify-between">
+                <span class="font-bold text-[var(--accent-primary)] text-sm">{tool.name}</span>
+                <span class="text-[9px] uppercase px-1.5 py-0.5 rounded bg-[var(--accent-primary)]/20 text-[var(--accent-primary)] font-bold">
+                  LANGCHAIN READY
+                </span>
+              </div>
+              <p class="text-[11px] text-[var(--text-muted)]">{tool.description}</p>
+              {#if tool.input_schema?.properties}
+                <div class="text-[10px] text-[var(--text-secondary)] mt-1 pt-1 border-t border-[var(--border-color)]/40 font-mono">
+                  Args: {Object.keys(tool.input_schema.properties).join(', ')}
+                </div>
               {/if}
             </div>
           {/each}

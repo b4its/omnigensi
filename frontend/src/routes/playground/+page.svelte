@@ -24,9 +24,24 @@
   } from 'lucide-svelte';
 
   let workflows = $state<any[]>([]);
+  let agents = $state<any[]>([]);
   let selectedWorkflowId = $state<string>('');
   let taskPrompt = $state<string>(
     'Architect and implement a secure, low-latency microservices API gateway with distributed token-bucket rate limiting and comprehensive audit logging.'
+  );
+
+  const currentWorkflow = $derived(workflows.find(w => w.id === selectedWorkflowId));
+  const workflowNodes = $derived(
+    (currentWorkflow?.graph_schema?.nodes || []).map((n: any) => {
+      const ag = agents.find(a => a.id === n.agent_id);
+      return {
+        node_id: n.node_id,
+        agent_id: n.agent_id,
+        agent_name: ag?.name || n.node_id,
+        role: ag?.role || 'Agent',
+        node_type: ag?.node_type || 'worker',
+      };
+    })
   );
 
   let isExecuting = $state<boolean>(false);
@@ -61,7 +76,12 @@
 
   onMount(async () => {
     try {
-      workflows = await api.getWorkflows();
+      const [wfs, ags] = await Promise.all([
+        api.getWorkflows(),
+        api.getAgents().catch(() => []),
+      ]);
+      workflows = wfs;
+      agents = ags;
       const queryWf = page.url.searchParams.get('workflow_id');
       const queryExec = page.url.searchParams.get('execution_id');
 
@@ -443,6 +463,51 @@
 
     <!-- CENTER PANEL (5 Cols): Live Telemetry Terminal & Stepper -->
     <div class="lg:col-span-5 space-y-4">
+      <!-- Agent Stepper Pipeline Track -->
+      {#if workflowNodes.length > 0}
+        <div class="border border-[var(--border-color)] bg-[var(--bg-surface)] p-3 chamfer-sm space-y-2">
+          <div class="flex items-center justify-between text-[10px] font-hud text-[var(--text-muted)] border-b border-[var(--border-color)]/50 pb-1.5">
+            <span class="text-[var(--accent-primary)] font-bold flex items-center gap-1.5">
+              <Cpu class="w-3.5 h-3.5" />
+              DYNAMIC AGENT PIPELINE STEPPER
+            </span>
+            <span>{workflowNodes.length} NODES</span>
+          </div>
+
+          <div class="flex items-center gap-2 overflow-x-auto py-1">
+            {#each workflowNodes as node, idx}
+              {@const isActive = activeNodeId === node.node_id}
+              {@const isCompleted = !isActive && terminalLogs.some(l => l.type === 'agent_start' && l.node_id === node.node_id)}
+              <div class="flex items-center gap-2 flex-shrink-0">
+                <div class="p-2 border chamfer-sm transition-all select-none min-w-[125px] {isActive ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/15 shadow-[0_0_12px_rgba(0,240,255,0.4)]' : isCompleted ? 'border-[var(--status-success)]/60 bg-[var(--status-success)]/10' : 'border-[var(--border-color)]/60 bg-[var(--bg-elevated)]/40 opacity-75'}">
+                  <div class="flex items-center justify-between gap-1">
+                    <span class="text-[9px] font-code font-bold truncate max-w-[85px] {isActive ? 'text-[var(--accent-primary)]' : isCompleted ? 'text-[var(--status-success)]' : 'text-[var(--text-muted)]'}">
+                      {node.agent_name}
+                    </span>
+                    <span class="w-2 h-2 rounded-full {isActive ? 'bg-[var(--accent-primary)] animate-ping' : isCompleted ? 'bg-[var(--status-success)]' : 'bg-[var(--text-muted)]'}"></span>
+                  </div>
+                  <div class="text-[8px] font-code text-[var(--text-muted)] truncate mt-0.5">
+                    {node.role}
+                  </div>
+                  <div class="mt-1 flex items-center justify-between text-[8px] font-code">
+                    <span class="uppercase font-bold {node.node_type === 'reviewer' ? 'text-[var(--status-warning)]' : node.node_type === 'supervisor' ? 'text-[#c084fc]' : 'text-[var(--accent-primary)]'}">
+                      {node.node_type}
+                    </span>
+                    <span class="font-bold {isActive ? 'text-[var(--accent-primary)]' : isCompleted ? 'text-[var(--status-success)]' : 'text-[var(--text-muted)]'}">
+                      {isActive ? 'ACTIVE' : isCompleted ? 'DONE' : 'WAITING'}
+                    </span>
+                  </div>
+                </div>
+
+                {#if idx < workflowNodes.length - 1}
+                  <span class="text-[var(--border-color)] font-bold text-xs">&rarr;</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <!-- Reviewer Loop Status Alert -->
       {#if reviewerDecision}
         <div class="p-3 border chamfer-sm font-code text-xs transition-all {reviewerDecision.is_approved ? 'border-[var(--status-success)] bg-[var(--status-success)]/10 text-[var(--status-success)]' : 'border-[var(--status-warning)] bg-[var(--status-warning)]/10 text-[var(--status-warning)]'}">
