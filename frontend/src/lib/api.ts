@@ -179,6 +179,20 @@ export const api = {
 	getMCPServers: () => apiFetch<any[]>('/api/v1/mcp/servers'),
 	registerMCPServer: (data: any) =>
 		apiFetch<any>('/api/v1/mcp/servers', { method: 'POST', body: JSON.stringify(data) }),
+	updateMCPServer: (serverName: string, data: any) =>
+		apiFetch<any>(`/api/v1/mcp/servers/${encodeURIComponent(serverName)}`, {
+			method: 'PUT',
+			body: JSON.stringify(data)
+		}),
+	toggleMCPServer: (serverName: string, enabled: boolean) =>
+		apiFetch<any>(`/api/v1/mcp/servers/${encodeURIComponent(serverName)}`, {
+			method: 'PATCH',
+			body: JSON.stringify({ enabled })
+		}),
+	deleteMCPServer: (serverName: string) =>
+		apiFetch<void>(`/api/v1/mcp/servers/${encodeURIComponent(serverName)}`, {
+			method: 'DELETE'
+		}),
 	getMCPServerTools: (serverName: string) =>
 		apiFetch<{ server: string; tools: any[] }>(
 			`/api/v1/mcp/servers/${encodeURIComponent(serverName)}/tools`

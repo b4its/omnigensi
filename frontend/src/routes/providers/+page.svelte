@@ -32,6 +32,8 @@
   let mcpLoading = $state<Record<string, boolean>>({});
   let modelSearch = $state<string>('');
   let showMcpModal = $state<boolean>(false);
+  let editingMcpName = $state<string | null>(null);
+  let mcpBusy = $state<Record<string, boolean>>({});
   let mcpFormName = $state<string>('');
   let mcpFormType = $state<string>('stdio');
   let mcpFormCommand = $state<string>('');
@@ -83,6 +85,7 @@
   }
 
   function openMcpModal() {
+    editingMcpName = null;
     mcpFormName = '';
     mcpFormType = 'stdio';
     mcpFormCommand = '';
@@ -93,9 +96,21 @@
     showMcpModal = true;
   }
 
-  async function handleRegisterMcp(e: SubmitEvent) {
+  function openMcpEditModal(server: any) {
+    editingMcpName = server.name;
+    mcpFormName = server.name;
+    mcpFormType = server.server_type ?? 'stdio';
+    mcpFormCommand = server.command ?? '';
+    mcpFormArgs = (server.args || []).join(' ');
+    mcpFormUrl = server.url ?? '';
+    mcpFormDescription = server.description ?? '';
+    mcpFormError = '';
+    showMcpModal = true;
+  }
+
+  async function handleSaveMcp(e: SubmitEvent) {
     e.preventDefault();
-    if (!mcpFormName.trim()) {
+    if (!editingMcpName && !mcpFormName.trim()) {
       mcpFormError = 'Server name is required.';
       return;
     }
@@ -110,21 +125,56 @@
     mcpFormSubmitting = true;
     mcpFormError = '';
     try {
-      await api.registerMCPServer({
-        name: mcpFormName.trim(),
+      const shared = {
         server_type: mcpFormType,
         command: mcpFormType === 'stdio' ? mcpFormCommand.trim() : null,
         args: mcpFormArgs.trim() ? mcpFormArgs.trim().split(/\s+/) : [],
         url: mcpFormType === 'sse' ? mcpFormUrl.trim() : null,
-        enabled: true,
         description: mcpFormDescription.trim() || 'Model Context Protocol Server Bridge',
-      });
+      };
+      if (editingMcpName) {
+        await api.updateMCPServer(editingMcpName, shared);
+      } else {
+        await api.registerMCPServer({
+          name: mcpFormName.trim(),
+          ...shared,
+          enabled: true,
+        });
+      }
       showMcpModal = false;
+      editingMcpName = null;
       await loadProviders();
     } catch (err: any) {
-      mcpFormError = err.message || 'Failed to register MCP server';
+      mcpFormError = err.message || 'Failed to save MCP server';
     } finally {
       mcpFormSubmitting = false;
+    }
+  }
+
+  async function handleToggleMcp(server: any) {
+    mcpBusy[server.name] = true;
+    try {
+      await api.toggleMCPServer(server.name, !server.enabled);
+      await loadProviders();
+    } catch (err: any) {
+      alert(`Toggle failed: ${err.message}`);
+    } finally {
+      mcpBusy[server.name] = false;
+    }
+  }
+
+  async function handleDeleteMcp(server: any) {
+    if (!confirm(`Remove MCP server '${server.name}'? Its configuration and cached tools will be dropped.`)) {
+      return;
+    }
+    mcpBusy[server.name] = true;
+    try {
+      await api.deleteMCPServer(server.name);
+      await loadProviders();
+    } catch (err: any) {
+      alert(`Delete failed: ${err.message}`);
+    } finally {
+      mcpBusy[server.name] = false;
     }
   }
 
@@ -415,21 +465,57 @@
               {server.description || 'Model Context Protocol Server Adapter'}
             </p>
 
-            <div class="pt-2 border-t border-[var(--border-color)]/50 flex items-center justify-between">
-              <span class="text-[10px] text-[var(--status-success)] font-bold flex items-center gap-1">
-                <span class="w-2 h-2 rounded-full bg-[var(--status-success)] inline-block"></span>
-                ACTIVE PROTOCOL
+            <div class="pt-2 border-t border-[var(--border-color)]/50 flex flex-wrap items-center justify-between gap-2">
+              <span class="text-[10px] font-bold flex items-center gap-1 {server.enabled ? 'text-[var(--status-success)]' : 'text-[var(--text-muted)]'}">
+                <span class="w-2 h-2 rounded-full inline-block {server.enabled ? 'bg-[var(--status-success)]' : 'bg-[var(--text-muted)]'}"></span>
+                {server.enabled ? 'ACTIVE PROTOCOL' : 'DISABLED'}
               </span>
 
-              <button
-                type="button"
-                onclick={() => handleInspectMcpTools(server)}
-                disabled={mcpLoading[server.name]}
-                class="px-2.5 py-1 text-xs font-hud border border-[var(--accent-primary)] text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 rounded-none transition-colors flex items-center gap-1 cursor-pointer"
-              >
-                <RefreshCw class="w-3 h-3 {mcpLoading[server.name] ? 'animate-spin' : ''}" />
-                <span>{mcpLoading[server.name] ? 'INSPECTING...' : 'DISCOVER TOOLS'}</span>
-              </button>
+              <div class="flex items-center gap-1">
+                <button
+                  type="button"
+                  onclick={() => handleInspectMcpTools(server)}
+                  disabled={mcpLoading[server.name] || !server.enabled}
+                  title={server.enabled ? 'Discover tools' : 'Enable the server to discover tools'}
+                  class="px-2.5 py-1.5 text-xs font-hud border border-[var(--accent-primary)] text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 rounded-none transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <RefreshCw class="w-3 h-3 {mcpLoading[server.name] ? 'animate-spin' : ''}" />
+                  <span>{mcpLoading[server.name] ? 'INSPECTING...' : 'DISCOVER TOOLS'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onclick={() => handleToggleMcp(server)}
+                  disabled={mcpBusy[server.name]}
+                  class="p-2 rounded transition-colors cursor-pointer disabled:opacity-50 {server.enabled ? 'text-[var(--status-success)] hover:bg-[var(--status-success)]/10' : 'text-[var(--text-muted)] hover:bg-[var(--bg-elevated)]'}"
+                  title={server.enabled ? 'Disable server' : 'Enable server'}
+                  aria-label={server.enabled ? `Disable ${server.name}` : `Enable ${server.name}`}
+                >
+                  <Power class="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onclick={() => openMcpEditModal(server)}
+                  disabled={mcpBusy[server.name]}
+                  class="p-2 text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 rounded transition-colors cursor-pointer disabled:opacity-50"
+                  title="Edit server configuration"
+                  aria-label={`Edit ${server.name}`}
+                >
+                  <Pencil class="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onclick={() => handleDeleteMcp(server)}
+                  disabled={mcpBusy[server.name]}
+                  class="p-2 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 rounded transition-colors cursor-pointer disabled:opacity-50"
+                  title="Remove server"
+                  aria-label={`Remove ${server.name}`}
+                >
+                  <Trash2 class="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         </CyberCard>
@@ -654,7 +740,7 @@
       <div class="w-full max-w-lg border border-[var(--accent-primary)] bg-[var(--bg-surface)] p-6 chamfer shadow-[var(--border-glow)] space-y-4">
         <div class="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
           <div class="font-hud font-bold text-sm text-[var(--text-primary)]">
-            REGISTER NEW MCP SERVER
+            {editingMcpName ? 'EDIT MCP SERVER' : 'REGISTER NEW MCP SERVER'}
           </div>
           <button
             type="button"
@@ -671,7 +757,7 @@
           </div>
         {/if}
 
-        <form onsubmit={handleRegisterMcp} class="space-y-4 text-xs font-code">
+        <form onsubmit={handleSaveMcp} class="space-y-4 text-xs font-code">
           <div>
             <label class="block text-[var(--text-muted)] mb-1">
               <span>Server Name</span>
@@ -679,10 +765,16 @@
                 type="text"
                 bind:value={mcpFormName}
                 placeholder="e.g. postgres-mcp"
-                class="w-full mt-1 px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                disabled={!!editingMcpName}
+                class="w-full mt-1 px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)] disabled:opacity-60 disabled:cursor-not-allowed"
                 required
               />
             </label>
+            {#if editingMcpName}
+              <span class="text-[10px] text-[var(--text-muted)] mt-1 block">
+                Server name is immutable; remove and re-add to rename.
+              </span>
+            {/if}
           </div>
 
           <div>
@@ -752,7 +844,7 @@
               CANCEL
             </CyberButton>
             <CyberButton variant="primary" size="sm" type="submit" disabled={mcpFormSubmitting}>
-              {mcpFormSubmitting ? 'REGISTERING...' : 'REGISTER SERVER'}
+              {mcpFormSubmitting ? 'SAVING...' : editingMcpName ? 'SAVE CHANGES' : 'REGISTER SERVER'}
             </CyberButton>
           </div>
         </form>
