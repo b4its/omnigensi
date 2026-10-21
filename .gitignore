@@ -39,6 +39,9 @@ frontend/build/
 backend/workspace/*
 !backend/workspace/.gitkeep
 
+# Database backups produced by `make db-dump`
+backups/
+
 # OS & IDE
 .DS_Store
 Thumbs.db

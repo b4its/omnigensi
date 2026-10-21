@@ -8,7 +8,7 @@ docker compose up -d
 ```
 
 Services:
-- **postgres**: PostgreSQL 16 on port 5435 (host) / 5432 (container)
-- **redis**: Redis 7 on port 6382 (host) / 6379 (container)
-- **backend**: FastAPI application on port 8000
-- **frontend**: SvelteKit application on port 5173
+- **postgres**: PostgreSQL 16 on port 5558 (host) / 5432 (container)
+- **redis**: Redis 7 on port 6505 (host) / 6379 (container)
+- **backend**: FastAPI application on port 8123
+- **frontend**: SvelteKit application on port 5296
