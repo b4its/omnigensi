@@ -4,6 +4,9 @@
   import { api } from '$lib/api';
   import CyberCard from '$lib/components/ui/CyberCard.svelte';
   import CyberButton from '$lib/components/ui/CyberButton.svelte';
+  import AgentNode from '$lib/components/workflow/AgentNode.svelte';
+  import { SvelteFlow, Controls, Background, BackgroundVariant } from '@xyflow/svelte';
+  import '@xyflow/svelte/dist/style.css';
   import {
     Network,
     Plus,
@@ -16,11 +19,16 @@
     Sliders,
     Save,
     Cpu,
+    LayoutGrid,
+    ListFilter,
   } from 'lucide-svelte';
 
   let workflows = $state<any[]>([]);
   let agents = $state<any[]>([]);
   let loading = $state<boolean>(true);
+
+  // View Mode: 'canvas' (Xyflow interactive graph) vs 'list' (sequential configuration)
+  let viewMode = $state<'canvas' | 'list'>('canvas');
 
   // Active / Selected Workflow for visual editing
   let selectedWorkflow = $state<any | null>(null);
@@ -32,6 +40,10 @@
   let pipelineNodes = $state<Array<{ nodeId: string; agentId: string }>>([]);
   let conditionalEdges = $state<Array<{ from: string; on_approve: string; on_reject: string }>>([]);
   let isSaving = $state<boolean>(false);
+
+  const nodeTypes = {
+    agentNode: AgentNode,
+  };
 
   async function loadData() {
     try {
@@ -120,7 +132,6 @@
 
     isSaving = true;
     try {
-      // Assemble graph schema
       const nodes = pipelineNodes.map(n => ({
         node_id: n.nodeId,
         agent_id: n.agentId,
@@ -133,7 +144,6 @@
         const ag = getAgent(curr.agentId);
 
         if (ag?.node_type === 'reviewer') {
-          // Conditional edge
           const prevWorker = pipelineNodes.slice(0, i).reverse().find(p => getAgent(p.agentId)?.node_type === 'worker');
           const rejectTarget = prevWorker ? prevWorker.nodeId : pipelineNodes[0].nodeId;
           const approveTarget = next ? next.nodeId : 'END';
@@ -195,6 +205,60 @@
     if (!selectedWorkflow) return;
     goto(`/playground?workflow_id=${selectedWorkflow.id}`);
   }
+
+  // Derive Xyflow nodes & edges dynamically
+  const xyflowNodes = $derived(
+    pipelineNodes.map((n, idx) => {
+      const ag = getAgent(n.agentId);
+      return {
+        id: n.nodeId,
+        type: 'agentNode',
+        position: { x: 200, y: idx * 150 + 30 },
+        data: {
+          label: n.nodeId,
+          agent_name: ag?.name || n.nodeId,
+          role: ag?.role,
+          node_type: ag?.node_type || 'worker',
+          model_name: ag?.model_name,
+          tools_config: ag?.tools_config || [],
+        },
+      };
+    })
+  );
+
+  const xyflowEdges = $derived(
+    pipelineNodes.flatMap((n, idx) => {
+      const next = pipelineNodes[idx + 1];
+      const ag = getAgent(n.agentId);
+      const list: any[] = [];
+
+      if (next) {
+        list.push({
+          id: `edge-${n.nodeId}-${next.nodeId}`,
+          source: n.nodeId,
+          target: next.nodeId,
+          animated: true,
+          style: 'stroke: #00F0FF; stroke-width: 2px;',
+        });
+      }
+
+      if (ag?.node_type === 'reviewer') {
+        const prevWorker = pipelineNodes.slice(0, idx).reverse().find(p => getAgent(p.agentId)?.node_type === 'worker');
+        if (prevWorker) {
+          list.push({
+            id: `edge-reject-${n.nodeId}-${prevWorker.nodeId}`,
+            source: n.nodeId,
+            sourceHandle: 'reject',
+            target: prevWorker.nodeId,
+            label: 'REVISE LOOP',
+            animated: true,
+            style: 'stroke: #FFB800; stroke-width: 2px; stroke-dasharray: 5,5;',
+          });
+        }
+      }
+      return list;
+    })
+  );
 </script>
 
 <div class="space-y-6">
@@ -283,78 +347,116 @@
             </div>
           </div>
 
-          <!-- Visual Node Flow Canvas -->
+          <!-- Visual Node Flow Canvas & Xyflow View -->
           <div class="pt-4 border-t border-[var(--border-color)]/50">
             <div class="flex items-center justify-between mb-3">
-              <div class="font-hud font-bold text-xs text-[var(--text-primary)]">
-                ASSEMBLY PIPELINE SEQUENCE (VISUAL GRAPH)
+              <div class="flex items-center gap-2">
+                <span class="font-hud font-bold text-xs text-[var(--text-primary)]">
+                  ASSEMBLY PIPELINE GRAPH
+                </span>
+                <!-- View Mode Switcher -->
+                <div class="flex items-center border border-[var(--border-color)] rounded-sm overflow-hidden text-[10px]">
+                  <button
+                    type="button"
+                    onclick={() => viewMode = 'canvas'}
+                    class="px-2 py-1 flex items-center gap-1 font-hud transition-colors {viewMode === 'canvas' ? 'bg-[var(--accent-primary)] text-black font-bold' : 'bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-white'}"
+                  >
+                    <LayoutGrid class="w-3 h-3" />
+                    XYFLOW CANVAS
+                  </button>
+                  <button
+                    type="button"
+                    onclick={() => viewMode = 'list'}
+                    class="px-2 py-1 flex items-center gap-1 font-hud transition-colors {viewMode === 'list' ? 'bg-[var(--accent-primary)] text-black font-bold' : 'bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-white'}"
+                  >
+                    <ListFilter class="w-3 h-3" />
+                    STEP SEQUENCE
+                  </button>
+                </div>
               </div>
+
               <CyberButton variant="outline" size="sm" onclick={addNodeToPipeline}>
                 <Plus class="w-3.5 h-3.5" />
                 <span>ADD STEP</span>
               </CyberButton>
             </div>
 
-            <!-- Sequence List -->
-            <div class="space-y-3">
-              {#each pipelineNodes as node, idx (node.nodeId + idx)}
-                {@const currentAgent = getAgent(node.agentId)}
-                {@const isReviewer = currentAgent?.node_type === 'reviewer'}
+            {#if viewMode === 'canvas'}
+              <!-- Xyflow Interactive Graph Canvas -->
+              <div class="h-[460px] w-full border border-[var(--border-color)] bg-[#030712] chamfer-sm relative overflow-hidden">
+                <SvelteFlow
+                  nodes={xyflowNodes}
+                  edges={xyflowEdges}
+                  {nodeTypes}
+                  fitView
+                  class="bg-[#030712]"
+                >
+                  <Controls class="!bg-[var(--bg-surface)] !border-[var(--border-color)] !text-[var(--text-primary)]" />
+                  <Background variant={BackgroundVariant.Dots} gap={16} size={1} patternColor="#00F0FF" />
+                </SvelteFlow>
+              </div>
+            {:else}
+              <!-- Step Sequence List -->
+              <div class="space-y-3">
+                {#each pipelineNodes as node, idx (node.nodeId + idx)}
+                  {@const currentAgent = getAgent(node.agentId)}
+                  {@const isReviewer = currentAgent?.node_type === 'reviewer'}
 
-                <div class="relative border p-3 chamfer-sm transition-all {isReviewer ? 'border-[var(--status-warning)]/60 bg-[var(--status-warning)]/5' : 'border-[var(--border-color)] bg-[var(--bg-elevated)]/40'}">
-                  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div class="flex items-center gap-2">
-                      <span class="w-6 h-6 rounded-full bg-[var(--accent-primary)] text-black font-hud font-bold text-xs flex items-center justify-center">
-                        {idx + 1}
-                      </span>
-                      <span class="font-hud font-bold text-xs text-[var(--text-primary)]">
-                        NODE: {node.nodeId}
-                      </span>
-                      <span class="px-1.5 py-0.2 rounded text-[9px] uppercase font-bold {isReviewer ? 'bg-[var(--status-warning)]/20 text-[var(--status-warning)]' : 'bg-[var(--accent-primary)]/20 text-[var(--accent-primary)]'}">
-                        {currentAgent?.node_type || 'worker'}
-                      </span>
+                  <div class="relative border p-3 chamfer-sm transition-all {isReviewer ? 'border-[var(--status-warning)]/60 bg-[var(--status-warning)]/5' : 'border-[var(--border-color)] bg-[var(--bg-elevated)]/40'}">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div class="flex items-center gap-2">
+                        <span class="w-6 h-6 rounded-full bg-[var(--accent-primary)] text-black font-hud font-bold text-xs flex items-center justify-center">
+                          {idx + 1}
+                        </span>
+                        <span class="font-hud font-bold text-xs text-[var(--text-primary)]">
+                          NODE: {node.nodeId}
+                        </span>
+                        <span class="px-1.5 py-0.2 rounded text-[9px] uppercase font-bold {isReviewer ? 'bg-[var(--status-warning)]/20 text-[var(--status-warning)]' : 'bg-[var(--accent-primary)]/20 text-[var(--accent-primary)]'}">
+                          {currentAgent?.node_type || 'worker'}
+                        </span>
+                      </div>
+
+                      <div class="flex items-center gap-2">
+                        <select
+                          bind:value={node.agentId}
+                          class="px-2.5 py-1.5 bg-[var(--bg-surface)] border border-[var(--border-color)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                        >
+                          {#each agents as ag}
+                            <option value={ag.id}>{ag.name} ({ag.node_type})</option>
+                          {/each}
+                        </select>
+
+                        <button
+                          type="button"
+                          onclick={() => removeNodeFromPipeline(idx)}
+                          class="p-1.5 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 rounded"
+                          title="Remove step"
+                        >
+                          <Trash2 class="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
 
-                    <div class="flex items-center gap-2">
-                      <select
-                        bind:value={node.agentId}
-                        class="px-2.5 py-1.5 bg-[var(--bg-surface)] border border-[var(--border-color)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
-                      >
-                        {#each agents as ag}
-                          <option value={ag.id}>{ag.name} ({ag.node_type})</option>
-                        {/each}
-                      </select>
-
-                      <button
-                        type="button"
-                        onclick={() => removeNodeFromPipeline(idx)}
-                        class="p-1.5 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 rounded"
-                        title="Remove step"
-                      >
-                        <Trash2 class="w-4 h-4" />
-                      </button>
-                    </div>
+                    <!-- Reviewer Cyclic Edge Indicator -->
+                    {#if isReviewer}
+                      <div class="mt-2.5 pt-2 border-t border-[var(--status-warning)]/30 flex items-center gap-2 text-[10px] text-[var(--status-warning)]">
+                        <RotateCcw class="w-3.5 h-3.5 animate-spin-slow" />
+                        <span>
+                          Cyclic Loop Active: If <code class="font-bold">is_approved = false</code>, rolls back to preceding Worker node for revision (Max {wfMaxRevisions} loops).
+                        </span>
+                      </div>
+                    {/if}
                   </div>
 
-                  <!-- Reviewer Cyclic Edge Indicator -->
-                  {#if isReviewer}
-                    <div class="mt-2.5 pt-2 border-t border-[var(--status-warning)]/30 flex items-center gap-2 text-[10px] text-[var(--status-warning)]">
-                      <RotateCcw class="w-3.5 h-3.5 animate-spin-slow" />
-                      <span>
-                        Cyclic Loop Active: If <code class="font-bold">is_approved = false</code>, rolls back to preceding Worker node for revision (Max {wfMaxRevisions} loops).
-                      </span>
+                  <!-- Edge Connector Arrow -->
+                  {#if idx < pipelineNodes.length - 1}
+                    <div class="flex justify-center my-1 text-[var(--accent-primary)]">
+                      <ArrowDown class="w-4 h-4" />
                     </div>
                   {/if}
-                </div>
-
-                <!-- Edge Connector Arrow -->
-                {#if idx < pipelineNodes.length - 1}
-                  <div class="flex justify-center my-1 text-[var(--accent-primary)]">
-                    <ArrowDown class="w-4 h-4" />
-                  </div>
-                {/if}
-              {/each}
-            </div>
+                {/each}
+              </div>
+            {/if}
           </div>
 
           <!-- Save Actions -->
