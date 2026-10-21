@@ -1,10 +1,11 @@
 import uuid
 from typing import List, Any
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import Pagination
 from app.core.database import get_db
 from app.core.security import encrypt_api_key, decrypt_api_key
 from app.models.provider import LLMProvider
@@ -48,11 +49,22 @@ async def create_provider(
 
 
 @router.get("", response_model=List[ProviderResponse])
-async def list_providers(db: AsyncSession = Depends(get_db)) -> Any:
+async def list_providers(
+    response: Response,
+    page: Pagination = Depends(),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    total = await db.scalar(select(func.count()).select_from(LLMProvider)) or 0
     result = await db.execute(
-        select(LLMProvider).order_by(LLMProvider.created_at.desc())
+        select(LLMProvider)
+        .order_by(LLMProvider.created_at.desc())
+        .limit(page.limit)
+        .offset(page.offset)
     )
     providers = result.scalars().all()
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Limit"] = str(page.limit)
+    response.headers["X-Offset"] = str(page.offset)
     return [
         ProviderResponse(
             id=p.id,

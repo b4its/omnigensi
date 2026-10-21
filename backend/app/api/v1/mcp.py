@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from app.engine.mcp_bridge import mcp_manager, MCPServerConfig
@@ -8,6 +8,21 @@ router = APIRouter(prefix="/mcp", tags=["Model Context Protocol (MCP)"])
 
 class ToolExecuteRequest(BaseModel):
     arguments: Dict[str, Any] = {}
+
+
+class MCPServerToolsResponse(BaseModel):
+    """Tools discovered from a single MCP server."""
+
+    server: str
+    tools: List[Dict[str, Any]] = []
+
+
+class MCPToolExecuteResponse(BaseModel):
+    """Result of executing one tool on an MCP server."""
+
+    success: bool = True
+    result: Any = None
+    error: Optional[str] = None
 
 
 @router.get("/servers", response_model=List[MCPServerConfig])
@@ -27,7 +42,7 @@ async def register_mcp_server(config: MCPServerConfig):
     return config
 
 
-@router.get("/servers/{server_name}/tools")
+@router.get("/servers/{server_name}/tools", response_model=MCPServerToolsResponse)
 async def list_mcp_server_tools(server_name: str):
     """
     Discovers available tools from the specified MCP server.
@@ -37,10 +52,13 @@ async def list_mcp_server_tools(server_name: str):
         raise HTTPException(status_code=404, detail=f"MCP server '{server_name}' not found")
     
     tools = await mcp_manager.list_tools_for_server(server_name)
-    return {"server": server_name, "tools": tools}
+    return MCPServerToolsResponse(server=server_name, tools=tools)
 
 
-@router.post("/servers/{server_name}/tools/{tool_name}/execute")
+@router.post(
+    "/servers/{server_name}/tools/{tool_name}/execute",
+    response_model=MCPToolExecuteResponse,
+)
 async def execute_mcp_tool(server_name: str, tool_name: str, payload: ToolExecuteRequest):
     """
     Executes a specific tool on an MCP server.
@@ -51,6 +69,6 @@ async def execute_mcp_tool(server_name: str, tool_name: str, payload: ToolExecut
 
     try:
         result = await mcp_manager.execute_tool(server_name, tool_name, payload.arguments)
-        return result
+        return MCPToolExecuteResponse(success=True, result=result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,10 +1,11 @@
 import uuid
 from typing import List, Any
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import Pagination
 from app.core.database import get_db
 from app.models.agent import AgentTemplate
 from app.models.provider import LLMProvider
@@ -73,14 +74,24 @@ async def create_agent(
 
 
 @router.get("", response_model=List[AgentResponse])
-async def list_agents(db: AsyncSession = Depends(get_db)) -> Any:
+async def list_agents(
+    response: Response,
+    page: Pagination = Depends(),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    total = await db.scalar(select(func.count()).select_from(AgentTemplate)) or 0
     query = (
         select(AgentTemplate)
         .options(selectinload(AgentTemplate.provider))
         .order_by(AgentTemplate.created_at.desc())
+        .limit(page.limit)
+        .offset(page.offset)
     )
     result = await db.execute(query)
     agents = result.scalars().all()
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Limit"] = str(page.limit)
+    response.headers["X-Offset"] = str(page.offset)
     return [
         AgentResponse(
             id=a.id,

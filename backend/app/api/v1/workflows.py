@@ -1,9 +1,10 @@
 import uuid
 from typing import List, Any
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import Pagination
 from app.core.database import get_db
 from app.models.workflow import Workflow
 from app.schemas.workflow import (
@@ -32,10 +33,21 @@ async def create_workflow(
 
 
 @router.get("", response_model=List[WorkflowResponse])
-async def list_workflows(db: AsyncSession = Depends(get_db)) -> Any:
+async def list_workflows(
+    response: Response,
+    page: Pagination = Depends(),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    total = await db.scalar(select(func.count()).select_from(Workflow)) or 0
     result = await db.execute(
-        select(Workflow).order_by(Workflow.created_at.desc())
+        select(Workflow)
+        .order_by(Workflow.created_at.desc())
+        .limit(page.limit)
+        .offset(page.offset)
     )
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Limit"] = str(page.limit)
+    response.headers["X-Offset"] = str(page.offset)
     return result.scalars().all()
 
 

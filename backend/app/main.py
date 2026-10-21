@@ -1,17 +1,22 @@
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.core.config import settings
 from app.core.database import init_db
+from app.core.errors import install_error_handlers
 from app.core.security import sanitize_workspace_path
 from app.api.v1.providers import router as providers_router
 from app.api.v1.agents import router as agents_router
 from app.api.v1.workflows import router as workflows_router
 from app.schemas.execution import ExecutionResponse
+from app.schemas.system import (
+    ClientConfigResponse,
+    HealthResponse,
+    WorkflowExecutionCreated,
+)
 from app.api.v1.executions import router as executions_router, trigger_workflow_execution
 from app.api.v1.tools import router as tools_router
 from app.api.v1.mcp import router as mcp_router
@@ -21,6 +26,21 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("omnigensi")
+
+# SSE event names emitted by the execution engine. Shared with mobile clients
+# so they can wire up listeners without reading backend source.
+STREAM_EVENTS = [
+    "connected",
+    "agent_start",
+    "token_chunk",
+    "review_result",
+    "supervisor_directive",
+    "device_approval_required",
+    "device_file_write",
+    "tool_approval_response",
+    "workflow_complete",
+    "workflow_failed",
+]
 
 
 @asynccontextmanager
@@ -37,18 +57,23 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    version="2.0.0",
+    version=settings.APP_VERSION,
     description="Dynamic Multi-Agent AIaaS Platform with Local Device & Hardware Bridge",
     lifespan=lifespan,
 )
 
-# CORS Middleware
+install_error_handlers(app)
+
+# CORS Middleware - driven by configuration so the same backend serves the web
+# UI (browser) and a mobile app / mobile WebView on the LAN.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Development permissive, easily constrained via CORS_ORIGINS
+    allow_origins=settings.cors_origins_list,
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID", "Content-Disposition"],
 )
 
 # Register API v1 Routers
@@ -70,21 +95,71 @@ app.add_api_route(
 )
 
 
-@app.get("/health", tags=["Health"])
-@app.get(f"{settings.API_V1_STR}/health", tags=["Health"])
-async def health_check():
-    return {
-        "status": "healthy",
-        "service": "omnigensi-backend",
-        "version": "2.0.0",
-        "workspace_root": str(settings.workspace_path),
-    }
+@app.get("/health", tags=["Health"], response_model=HealthResponse)
+@app.get(f"{settings.API_V1_STR}/health", tags=["Health"], response_model=HealthResponse)
+async def health_check() -> HealthResponse:
+    return HealthResponse(
+        status="healthy",
+        service="omnigensi-backend",
+        version=settings.APP_VERSION,
+        workspace_root=str(settings.workspace_path),
+    )
+
+
+@app.get(
+    f"{settings.API_V1_STR}/config",
+    tags=["System"],
+    response_model=ClientConfigResponse,
+)
+async def client_config(request: Request) -> ClientConfigResponse:
+    """Bootstrap endpoint for clients (mobile app and web UI).
+
+    A mobile client should call this once at startup instead of hardcoding the
+    API version, stream path template or feature flags.
+    """
+    base_url = settings.PUBLIC_BASE_URL.rstrip("/") or str(request.base_url).rstrip("/")
+    return ClientConfigResponse(
+        service="omnigensi-backend",
+        version=settings.APP_VERSION,
+        api_version="v1",
+        api_base_path=settings.API_V1_STR,
+        base_url=base_url,
+        docs_url=f"{base_url}/docs",
+        openapi_url=f"{base_url}/openapi.json",
+        streaming={
+            "path_template": f"{settings.API_V1_STR}/executions/{{execution_id}}/stream",
+            "content_type": "text/event-stream",
+            "events": STREAM_EVENTS,
+            "keepalive": "comment frames (`: ping`) on idle",
+        },
+        pagination={
+            "params": ["limit", "offset"],
+            "default_limit": 50,
+            "max_limit": 200,
+        },
+        features={
+            "providers": True,
+            "agents": True,
+            "workflows": True,
+            "executions": True,
+            "execution_streaming": True,
+            "execution_cancel": True,
+            "tool_approval": True,
+            "mcp_servers": True,
+            "file_download": True,
+            "file_upload": False,
+        },
+        limits={"executions_page_size": 50, "max_page_size": 200},
+    )
 
 
 @app.get(f"{settings.API_V1_STR}/files/{{filename:path}}", tags=["Files"])
 async def download_workspace_file(filename: str):
     """
     HTTP fallback download endpoint for generated documents.
+
+    Used by mobile clients (and browsers without File System Access API) to
+    fetch agent-generated artifacts by their workspace-relative path.
     """
     try:
         file_path = sanitize_workspace_path(filename)

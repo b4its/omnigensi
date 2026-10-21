@@ -5,11 +5,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Any, Optional
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import Pagination
 from app.core.config import settings
 from app.core.database import get_db, AsyncSessionLocal
 from app.models.workflow import Workflow
@@ -21,6 +22,7 @@ from app.schemas.execution import (
     ExecutionResponse,
     ToolApprovalRequest,
 )
+from app.schemas.system import ActionAck
 from app.engine.publisher import ExecutionPublisher
 from app.engine.compiler import compile_workflow_graph
 from app.engine.tool_registry import create_markdown_document, create_word_document, create_pdf_document
@@ -198,10 +200,21 @@ async def trigger_workflow_execution(
 
 
 @router.get("", response_model=List[ExecutionResponse])
-async def list_executions(db: AsyncSession = Depends(get_db)) -> Any:
+async def list_executions(
+    response: Response,
+    page: Pagination = Depends(),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    total = await db.scalar(select(func.count()).select_from(WorkflowExecution)) or 0
     result = await db.execute(
-        select(WorkflowExecution).order_by(WorkflowExecution.started_at.desc()).limit(50)
+        select(WorkflowExecution)
+        .order_by(WorkflowExecution.started_at.desc())
+        .limit(page.limit)
+        .offset(page.offset)
     )
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Limit"] = str(page.limit)
+    response.headers["X-Offset"] = str(page.offset)
     return [ExecutionResponse.model_validate(e) for e in result.scalars().all()]
 
 
@@ -215,7 +228,11 @@ async def get_execution(
     return ExecutionResponse.model_validate(execution)
 
 
-@router.post("/{execution_id}/approve-tool")
+@router.post(
+    "/{execution_id}/approve-tool",
+    response_model=ActionAck,
+    tags=["Workflow Executions"],
+)
 async def approve_tool_execution(
     execution_id: uuid.UUID,
     payload: ToolApprovalRequest,
@@ -235,10 +252,14 @@ async def approve_tool_execution(
         },
     )
     await publisher.close()
-    return {"status": "ok", "message": "Approval status broadcasted"}
+    return ActionAck(status="ok", message="Approval status broadcasted")
 
 
-@router.post("/{execution_id}/cancel")
+@router.post(
+    "/{execution_id}/cancel",
+    response_model=ActionAck,
+    tags=["Workflow Executions"],
+)
 async def cancel_execution(
     execution_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -252,7 +273,9 @@ async def cancel_execution(
         raise HTTPException(status_code=404, detail="Execution not found")
 
     if execution.status in ("completed", "failed", "cancelled"):
-        return {"status": "ok", "message": f"Execution already {execution.status}"}
+        return ActionAck(
+            status="ok", message=f"Execution already {execution.status}"
+        )
 
     # Cancel in-memory task
     task = ACTIVE_EXECUTION_TASKS.get(str(execution_id))
@@ -271,7 +294,7 @@ async def cancel_execution(
     )
     await publisher.close()
 
-    return {"status": "cancelled", "message": "Execution cancelled successfully"}
+    return ActionAck(status="cancelled", message="Execution cancelled successfully")
 
 
 @router.get("/{execution_id}/stream")
