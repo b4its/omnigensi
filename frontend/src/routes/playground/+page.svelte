@@ -671,22 +671,27 @@
             <span>{workflowNodes.length} NODES</span>
           </div>
 
-          <div class="flex items-center gap-2 overflow-x-auto py-1">
+          {#if workflowNodes.length > 1}
+            <div class="text-[10px] font-code text-[var(--text-muted)] sm:hidden">
+              &larr; swipe to see all {workflowNodes.length} nodes &rarr;
+            </div>
+          {/if}
+          <div class="flex items-center gap-2 overflow-x-auto py-1 snap-x">
             {#each workflowNodes as node, idx}
               {@const isActive = activeNodeId === node.node_id}
               {@const isCompleted = !isActive && terminalLogs.some(l => l.type === 'agent_start' && l.node_id === node.node_id)}
               <div class="flex items-center gap-2 flex-shrink-0">
-                <div class="p-2 border chamfer-sm transition-all select-none min-w-[125px] {isActive ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/15 shadow-[0_0_12px_rgba(0,240,255,0.4)]' : isCompleted ? 'border-[var(--status-success)]/60 bg-[var(--status-success)]/10' : 'border-[var(--border-color)]/60 bg-[var(--bg-elevated)]/40 opacity-75'}">
+                <div class="p-2 border chamfer-sm transition-all select-none min-w-[140px] snap-start {isActive ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/15 shadow-[0_0_12px_rgba(0,240,255,0.4)]' : isCompleted ? 'border-[var(--status-success)]/60 bg-[var(--status-success)]/10' : 'border-[var(--border-color)]/60 bg-[var(--bg-elevated)]/40 opacity-75'}">
                   <div class="flex items-center justify-between gap-1">
-                    <span class="text-[9px] font-code font-bold truncate max-w-[85px] {isActive ? 'text-[var(--accent-primary)]' : isCompleted ? 'text-[var(--status-success)]' : 'text-[var(--text-muted)]'}">
+                    <span class="text-[11px] font-code font-bold truncate max-w-[95px] {isActive ? 'text-[var(--accent-primary)]' : isCompleted ? 'text-[var(--status-success)]' : 'text-[var(--text-muted)]'}">
                       {node.agent_name}
                     </span>
                     <span class="w-2 h-2 rounded-full {isActive ? 'bg-[var(--accent-primary)] animate-ping' : isCompleted ? 'bg-[var(--status-success)]' : 'bg-[var(--text-muted)]'}"></span>
                   </div>
-                  <div class="text-[8px] font-code text-[var(--text-muted)] truncate mt-0.5">
+                  <div class="text-[10px] font-code text-[var(--text-muted)] truncate mt-0.5">
                     {node.role}
                   </div>
-                  <div class="mt-1 flex items-center justify-between text-[8px] font-code">
+                  <div class="mt-1 flex items-center justify-between text-[10px] font-code">
                     <span class="uppercase font-bold {node.node_type === 'reviewer' ? 'text-[var(--status-warning)]' : node.node_type === 'supervisor' ? 'text-[#c084fc]' : 'text-[var(--accent-primary)]'}">
                       {node.node_type}
                     </span>
@@ -799,10 +804,10 @@
                         file.mime_type,
                         file.filepath || file.filename
                       )}
-                    class="p-1 text-[var(--accent-primary)] hover:underline flex items-center gap-0.5"
+                    class="p-2 -m-1 text-[var(--accent-primary)] hover:underline flex items-center gap-1"
                     aria-label={`Save ${file.filename}`}
                   >
-                    <Download class="w-3.5 h-3.5" />
+                    <Download class="w-4 h-4" />
                     Save Copy
                   </button>
                 </div>
@@ -816,8 +821,8 @@
 
   <!-- Human In The Loop (HITL) Authorization Modal -->
   {#if pendingApproval}
-    <div class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div class="bg-[var(--bg-surface)] border-2 border-[var(--accent-warning, #f59e0b)] p-6 max-w-lg w-full relative cyber-chamfer-lg shadow-2xl space-y-4">
+    <div class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div class="bg-[var(--bg-surface)] border-2 border-[var(--accent-warning, #f59e0b)] p-4 sm:p-6 max-w-lg w-full relative cyber-chamfer-lg shadow-2xl space-y-4 max-h-[92dvh] overflow-y-auto rounded-t-lg sm:rounded-none">
         <div class="flex items-center gap-3 border-b border-[var(--border-color)] pb-3">
           <ShieldAlert class="w-7 h-7 text-[var(--accent-warning, #f59e0b)] animate-pulse" />
           <div>

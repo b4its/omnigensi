@@ -293,7 +293,7 @@
                 <button
                   type="button"
                   onclick={() => openEditModal(agent)}
-                  class="p-1.5 text-[var(--text-muted)] hover:text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 rounded transition-colors"
+                  class="p-2.5 text-[var(--text-muted)] hover:text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 rounded transition-colors"
                   title="Edit agent"
                 >
                   <Edit3 class="w-3.5 h-3.5" />
@@ -301,7 +301,7 @@
                 <button
                   type="button"
                   onclick={() => handleDeleteAgent(agent.id, agent.name)}
-                  class="p-1.5 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 rounded transition-colors"
+                  class="p-2.5 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 rounded transition-colors"
                   title="Delete agent"
                 >
                   <Trash2 class="w-3.5 h-3.5" />
@@ -482,7 +482,7 @@
                   </div>
                   <div>
                     <div class="font-bold text-[11px]">{tool.name}</div>
-                    <div class="text-[9px] opacity-75 line-clamp-1">{tool.description}</div>
+                    <div class="text-[10px] opacity-75 line-clamp-1">{tool.description}</div>
                   </div>
                 </button>
               {/each}

@@ -435,7 +435,7 @@
                         <button
                           type="button"
                           onclick={() => removeNodeFromPipeline(idx)}
-                          class="p-1.5 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 rounded"
+                          class="p-2.5 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 rounded"
                           title="Remove step"
                         >
                           <Trash2 class="w-4 h-4" />
