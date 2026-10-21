@@ -126,12 +126,39 @@ async def seed() -> None:
             agents = list(existing_agents)
             print(f"[=] Found {len(agents)} existing agents.")
 
-        # 3. Create default workflow
+        # 3. Check or create supervisor agent
+        q_sup = await session.execute(
+            select(AgentTemplate).where(AgentTemplate.node_type == "supervisor")
+        )
+        existing_supervisor = q_sup.scalar_one_or_none()
+
+        if not existing_supervisor:
+            agent_sup = AgentTemplate(
+                id=uuid.uuid4(),
+                provider_id=provider.id,
+                name="CHRONOS-05 // Strategic Team Supervisor",
+                avatar_code="cyber-bot-05",
+                role="Executive Multi-Agent Orchestrator & Strategic Synthesizer",
+                goal="Harmonize multi-agent outputs, eliminate domain contradictions, and formulate unified strategic deliverables.",
+                backstory="High-level orchestration entity designed to govern autonomous agent clusters and enforce executive coherence.",
+                node_type="supervisor",
+                model_name="openai/gpt-4o",
+                temperature=0.3,
+                max_tokens=4096,
+                tools_config=["mcp_read_file", "mcp_write_file"],
+                require_device_approval=True,
+            )
+            session.add(agent_sup)
+            await session.commit()
+            print("[+] Seeded supervisor agent: CHRONOS-05 // Strategic Team Supervisor")
+            agents.append(agent_sup)
+
+        # 4. Create default workflows
         q_wf = await session.execute(select(Workflow).limit(1))
         existing_wf = q_wf.scalar_one_or_none()
 
         if not existing_wf and len(agents) >= 4:
-            schema = {
+            schema1 = {
                 "entry_point": "node_1",
                 "nodes": [
                     {"node_id": "node_1", "agent_id": str(agents[0].id)},
@@ -157,11 +184,40 @@ async def seed() -> None:
                 name="CYBER-PIPELINE // Full Blueprint & Local Artifact Publisher",
                 description="End-to-end multi-agent pipeline with conditional QA review loop and automated .md/.docx/.pdf generation onto local disk.",
                 max_revisions=3,
-                graph_schema=schema,
+                graph_schema=schema1,
             )
             session.add(workflow)
             await session.commit()
             print(f"[+] Created sample workflow: {workflow.name}")
+
+        # Check if supervisor workflow exists
+        q_wf2 = await session.execute(
+            select(Workflow).where(Workflow.name.like("%SUPERVISOR%"))
+        )
+        if not q_wf2.scalar_one_or_none() and len(agents) >= 5:
+            schema2 = {
+                "entry_point": "node_1",
+                "nodes": [
+                    {"node_id": "node_1", "agent_id": str(agents[0].id)},
+                    {"node_id": "node_2", "agent_id": str(agents[4].id)},
+                    {"node_id": "node_3", "agent_id": str(agents[3].id)},
+                ],
+                "edges": [
+                    {"from": "node_1", "to": "node_2", "type": "normal"},
+                    {"from": "node_2", "to": "node_3", "type": "normal"},
+                    {"from": "node_3", "to": "END", "type": "normal"},
+                ],
+            }
+            wf_supervisor = Workflow(
+                id=uuid.uuid4(),
+                name="SUPERVISOR-FLOW // Strategic Executive Synthesis & Export",
+                description="Supervisor-governed workflow: Deep Researcher passes findings to Chronos-05 Supervisor for master synthesis, then Fabricator materializes disk artifacts.",
+                max_revisions=2,
+                graph_schema=schema2,
+            )
+            session.add(wf_supervisor)
+            await session.commit()
+            print(f"[+] Created supervisor workflow: {wf_supervisor.name}")
 
     print("[*] Seeding finished successfully!")
 
