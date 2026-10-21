@@ -28,7 +28,7 @@
   };
 
   const variantClasses = {
-    primary: 'bg-[var(--accent-primary)] text-[#040814] font-bold hover:brightness-110 active:scale-[0.98] shadow-[0_0_12px_rgba(0,240,255,0.4)]',
+    primary: 'bg-[var(--accent-primary)] text-[var(--on-accent)] font-bold hover:brightness-110 active:scale-[0.98] shadow-[0_0_12px_rgba(0,240,255,0.4)]',
     cobalt: 'bg-[var(--accent-secondary)] text-white font-medium hover:brightness-110 active:scale-[0.98] shadow-[0_0_10px_rgba(0,102,255,0.4)]',
     danger: 'bg-[var(--status-danger)] text-white font-bold hover:brightness-110 active:scale-[0.98]',
     outline: 'border border-[var(--accent-primary)] text-[var(--accent-primary)] bg-transparent hover:bg-[var(--accent-primary)]/10 active:scale-[0.98]',

@@ -744,14 +744,14 @@
           <button
             type="button"
             onclick={() => activeTab = 'output'}
-            class="flex-1 py-1.5 text-center transition-colors {activeTab === 'output' ? 'text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)] font-bold' : 'text-[var(--text-muted)] hover:text-white'}"
+            class="flex-1 py-1.5 text-center transition-colors {activeTab === 'output' ? 'text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)] font-bold' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
           >
             FINAL DRAFT
           </button>
           <button
             type="button"
             onclick={() => activeTab = 'artifacts'}
-            class="flex-1 py-1.5 text-center transition-colors flex items-center justify-center gap-1 {activeTab === 'artifacts' ? 'text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)] font-bold' : 'text-[var(--text-muted)] hover:text-white'}"
+            class="flex-1 py-1.5 text-center transition-colors flex items-center justify-center gap-1 {activeTab === 'artifacts' ? 'text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)] font-bold' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
           >
             <span>HARDWARE FILES</span>
             {#if generatedFiles.length > 0}
@@ -763,7 +763,7 @@
         </div>
 
         {#if activeTab === 'output'}
-          <div class="prose prose-invert prose-xs max-h-[460px] overflow-y-auto font-code text-xs leading-relaxed text-[var(--text-primary)]">
+          <div class="prose prose-xs max-h-[60dvh] lg:max-h-[460px] overflow-y-auto font-code text-xs leading-relaxed text-[var(--text-primary)] dark-prose">
             {#if renderedHtml}
               {@html renderedHtml}
             {:else}

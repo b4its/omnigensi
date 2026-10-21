@@ -15,6 +15,8 @@
   --border-glow: 0 0 12px rgba(0, 240, 255, 0.35);
   --grid-line: rgba(0, 240, 255, 0.05);
   --scanline-opacity: 0.04;
+  /* Readable text colour on top of --accent-primary */
+  --on-accent: #040814;
 }
 
 :root[data-theme="light"] {
@@ -32,13 +34,23 @@
   --border-glow: 4px 4px 0px #0048E5;
   --grid-line: rgba(0, 72, 229, 0.07);
   --scanline-opacity: 0.01;
+  /* #040814 on #0048E5 is ~1.9:1 - white is required for legibility */
+  --on-accent: #FFFFFF;
+}
+
+html {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
   padding: 0;
   overflow-x: hidden;
@@ -146,4 +158,53 @@ body {
 
 .animate-neon {
   animation: neon-pulse 2s infinite ease-in-out;
+}
+
+/*
+ * Markdown output must follow the active theme. `prose-invert` forces light
+ * text, which turned headings, <strong> and <code> invisible on the white
+ * surface in light mode, so inversion is scoped to the dark theme only.
+ */
+.dark-prose {
+  color: var(--text-primary);
+}
+.dark-prose :where(h1, h2, h3, h4, h5, h6, strong, b) {
+  color: var(--text-primary);
+}
+.dark-prose :where(p, li, td, th) {
+  color: var(--text-primary);
+}
+.dark-prose :where(code, pre) {
+  color: var(--accent-primary);
+  background: var(--bg-elevated);
+}
+.dark-prose :where(a) {
+  color: var(--accent-primary);
+  text-decoration: underline;
+}
+.dark-prose :where(blockquote) {
+  border-left: 2px solid var(--border-color);
+  color: var(--text-muted);
+  padding-left: 0.75rem;
+}
+.dark-prose :where(table) {
+  border-color: var(--border-color);
+}
+
+/* Keyboard focus must stay visible: inputs intentionally remove the default
+   outline and otherwise only shift a 1px border colour. */
+:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* Respect users who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

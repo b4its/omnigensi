@@ -325,7 +325,7 @@
           <button
             type="button"
             onclick={() => showModal = false}
-            class="text-xs font-hud text-[var(--text-muted)] hover:text-white"
+            class="text-xs font-hud text-[var(--text-muted)] hover:text-[var(--text-primary)]"
           >
             [CLOSE]
           </button>

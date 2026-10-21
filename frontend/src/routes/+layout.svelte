@@ -19,6 +19,7 @@
     Layers,
     Menu,
     X,
+    History,
   } from 'lucide-svelte';
 
   let { children } = $props();
@@ -32,6 +33,7 @@
     { name: '[03] AGENT STUDIO', href: '/agents', icon: Bot },
     { name: '[04] GRAPH BUILDER', href: '/workflows', icon: Network },
     { name: '[05] EXECUTION DECK', href: '/playground', icon: Terminal },
+    { name: '[06] RUN HISTORY', href: '/executions', icon: History },
   ];
 
   onMount(() => {
@@ -66,7 +68,7 @@
 
       <!-- Logo & Branding -->
       <a href="/" class="flex items-center gap-2 group">
-        <div class="w-8 h-8 chamfer-sm bg-[var(--accent-primary)] text-[#040814] flex items-center justify-center font-hud font-black text-sm shadow-[var(--border-glow)]">
+        <div class="w-8 h-8 chamfer-sm bg-[var(--accent-primary)] text-[var(--on-accent)] flex items-center justify-center font-hud font-black text-sm shadow-[var(--border-glow)]">
           Ω
         </div>
         <div class="flex flex-col">
@@ -135,9 +137,9 @@
         {@const isActive = page.url.pathname === item.href || (page.url.pathname.startsWith(item.href) && item.href !== '/')}
         <a
           href={item.href}
-          class="flex items-center gap-2.5 px-3 py-2.5 rounded-sm font-hud text-xs tracking-wider transition-all duration-150 {isActive ? 'bg-[var(--accent-primary)] text-[#040814] font-bold shadow-[var(--border-glow)] chamfer-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]'}"
+          class="flex items-center gap-2.5 px-3 py-2.5 rounded-sm font-hud text-xs tracking-wider transition-all duration-150 {isActive ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] font-bold shadow-[var(--border-glow)] chamfer-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]'}"
         >
-          <item.icon class="w-4 h-4 {isActive ? 'text-[#040814]' : 'text-[var(--accent-primary)]'}" />
+          <item.icon class="w-4 h-4 {isActive ? 'text-[var(--on-accent)]' : 'text-[var(--accent-primary)]'}" />
           <span>{item.name}</span>
         </a>
       {/each}

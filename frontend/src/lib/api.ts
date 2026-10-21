@@ -323,13 +323,63 @@ export const api = {
 	updateAgent: (id: string, data: any) =>
 		apiFetch<any>(`/api/v1/agents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 	deleteAgent: (id: string) => apiFetch<void>(`/api/v1/agents/${id}`, { method: 'DELETE' }),
+	testAgent: (id: string, prompt: string, maxTokens?: number) =>
+		apiFetch<{
+			ok: boolean;
+			agent_id: string;
+			agent_name: string;
+			model_name: string;
+			provider_name?: string | null;
+			response_text?: string | null;
+			latency_ms: number;
+			prompt_tokens?: number | null;
+			completion_tokens?: number | null;
+			error?: string | null;
+		}>(`/api/v1/agents/${id}/test`, {
+			method: 'POST',
+			body: JSON.stringify({ prompt, max_tokens: maxTokens }),
+			timeoutMs: 90_000,
+			retries: 0
+		}),
+	duplicateAgent: (id: string, name?: string) =>
+		apiFetch<any>(`/api/v1/agents/${id}/duplicate`, {
+			method: 'POST',
+			body: JSON.stringify(name ? { name } : {})
+		}),
 
 	// Tools
 	getTools: () => apiFetch<any[]>('/api/v1/tools'),
+	executeTool: (toolId: string, args: Record<string, any>) =>
+		apiFetch<{ ok: boolean; tool_id: string; result?: any; error?: string | null }>(
+			`/api/v1/tools/${encodeURIComponent(toolId)}/execute`,
+			{ method: 'POST', body: JSON.stringify({ arguments: args }), timeoutMs: 60_000 }
+		),
 
 	// Workflows
-	getWorkflows: (page?: PageParams) =>
-		apiFetch<any[]>('/api/v1/workflows', { params: page as Record<string, number> }),
+	getWorkflows: (page?: PageParams & { q?: string }) =>
+		apiFetch<any[]>('/api/v1/workflows', {
+			params: page as Record<string, string | number>
+		}),
+	validateWorkflowGraph: (data: { name: string; graph_schema: any; max_revisions?: number }) =>
+		apiFetch<{
+			valid: boolean;
+			summary: string;
+			node_count: number;
+			edge_count: number;
+			entry_point?: string | null;
+			issues: { code: string; message: string; node_id?: string; edge_index?: number; field?: string }[];
+		}>('/api/v1/workflows/validate', { method: 'POST', body: JSON.stringify(data) }),
+	validateSavedWorkflow: (id: string) =>
+		apiFetch<{
+			valid: boolean;
+			summary: string;
+			issues: { code: string; message: string; node_id?: string; edge_index?: number; field?: string }[];
+		}>(`/api/v1/workflows/${id}/validate`),
+	duplicateWorkflow: (id: string, name?: string) =>
+		apiFetch<any>(`/api/v1/workflows/${id}/duplicate`, {
+			method: 'POST',
+			body: JSON.stringify(name ? { name } : {})
+		}),
 	getWorkflow: (id: string) => apiFetch<any>(`/api/v1/workflows/${id}`),
 	createWorkflow: (data: any) =>
 		apiFetch<any>('/api/v1/workflows', { method: 'POST', body: JSON.stringify(data) }),
@@ -355,6 +405,10 @@ export const api = {
 			method: 'POST',
 			body: JSON.stringify({ tool_call_id: toolCallId, approved, notes })
 		}),
+	retryExecution: (id: string) =>
+		apiFetch<any>(`/api/v1/executions/${id}/retry`, { method: 'POST' }),
+	deleteExecution: (id: string) =>
+		apiFetch<void>(`/api/v1/executions/${id}`, { method: 'DELETE' }),
 	cancelExecution: (id: string) =>
 		apiFetch<{ success: boolean; status: string; message: string }>(
 			`/api/v1/executions/${id}/cancel`,

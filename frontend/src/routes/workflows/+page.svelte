@@ -365,7 +365,7 @@
                   <button
                     type="button"
                     onclick={() => viewMode = 'canvas'}
-                    class="px-2 py-1 flex items-center gap-1 font-hud transition-colors {viewMode === 'canvas' ? 'bg-[var(--accent-primary)] text-black font-bold' : 'bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-white'}"
+                    class="px-2 py-1 flex items-center gap-1 font-hud transition-colors {viewMode === 'canvas' ? 'bg-[var(--accent-primary)] text-black font-bold' : 'bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
                   >
                     <LayoutGrid class="w-3 h-3" />
                     XYFLOW CANVAS
@@ -373,7 +373,7 @@
                   <button
                     type="button"
                     onclick={() => viewMode = 'list'}
-                    class="px-2 py-1 flex items-center gap-1 font-hud transition-colors {viewMode === 'list' ? 'bg-[var(--accent-primary)] text-black font-bold' : 'bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-white'}"
+                    class="px-2 py-1 flex items-center gap-1 font-hud transition-colors {viewMode === 'list' ? 'bg-[var(--accent-primary)] text-black font-bold' : 'bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
                   >
                     <ListFilter class="w-3 h-3" />
                     STEP SEQUENCE

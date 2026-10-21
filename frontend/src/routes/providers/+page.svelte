@@ -625,7 +625,7 @@
           <button
             type="button"
             onclick={() => showCreateModal = false}
-            class="p-2 text-[var(--text-muted)] hover:text-white text-xs font-hud"
+            class="p-2 text-[var(--text-muted)] hover:text-[var(--text-primary)] text-xs font-hud"
           >
             [CLOSE]
           </button>
@@ -776,7 +776,7 @@
           <button
             type="button"
             onclick={() => selectedProviderModels = null}
-            class="text-xs font-hud text-[var(--text-muted)] hover:text-white"
+            class="text-xs font-hud text-[var(--text-muted)] hover:text-[var(--text-primary)]"
           >
             [CLOSE]
           </button>
@@ -832,7 +832,7 @@
           <button
             type="button"
             onclick={() => selectedMcpTools = null}
-            class="text-xs font-hud text-[var(--text-muted)] hover:text-white"
+            class="text-xs font-hud text-[var(--text-muted)] hover:text-[var(--text-primary)]"
           >
             [CLOSE]
           </button>
@@ -871,7 +871,7 @@
           <button
             type="button"
             onclick={() => showMcpModal = false}
-            class="p-2 text-[var(--text-muted)] hover:text-white text-xs font-hud"
+            class="p-2 text-[var(--text-muted)] hover:text-[var(--text-primary)] text-xs font-hud"
           >
             [CLOSE]
           </button>
