@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { api } from '$lib/api';
+  import { api, type SystemStats } from '$lib/api';
   import { notify } from '$lib/stores/notify.svelte';
   import { deviceBridge } from '$lib/stores/deviceBridge.svelte';
   import CyberCard from '$lib/components/ui/CyberCard.svelte';
@@ -20,6 +20,8 @@
     FileText,
     Cpu,
     ExternalLink,
+    AlertTriangle,
+    RefreshCw,
   } from 'lucide-svelte';
 
   let providers = $state<any[]>([]);
@@ -27,25 +29,43 @@
   let workflows = $state<any[]>([]);
   let executions = $state<any[]>([]);
   let loading = $state<boolean>(true);
+  let loadError = $state<string | null>(null);
+  let stats = $state<SystemStats | null>(null);
   let quickTask = $state<string>('Design a high-availability banking gateway architecture with real-time fraud detection');
   let launching = $state<boolean>(false);
 
-  onMount(async () => {
+  /**
+   * Loads aggregate counts from /stats (server-side, exact) and only the
+   * small preview slices needed for the roster and recent list. Previously
+   * every collection was downloaded in full and counted client-side, which
+   * silently capped the counters at one page and looked like an empty
+   * system when the backend was unreachable.
+   */
+  async function loadDashboard() {
+    loading = true;
+    loadError = null;
     try {
-      const [p, a, w, e] = await Promise.all([
-        api.getProviders().catch(() => []),
-        api.getAgents().catch(() => []),
-        api.getWorkflows().catch(() => []),
-        api.getExecutions().catch(() => []),
+      const [statsRes, agentsRes, workflowsRes, executionsRes] = await Promise.all([
+        api.getStats(),
+        api.getAgents({ limit: 8 }),
+        api.getWorkflows({ limit: 50 }),
+        api.getExecutions({ limit: 5 }),
       ]);
-      providers = p;
-      agents = a;
-      workflows = w;
-      executions = e;
+      stats = statsRes;
+      agents = agentsRes;
+      workflows = workflowsRes;
+      executions = executionsRes;
+      // Keep the quick-launch picker usable without a second request.
+      providers = [];
+    } catch (err) {
+      stats = null;
+      loadError = err instanceof Error ? err.message : 'Unable to reach the backend';
     } finally {
       loading = false;
     }
-  });
+  }
+
+  onMount(loadDashboard);
 
   async function handleQuickLaunch() {
     if (!quickTask.trim()) return;
@@ -110,13 +130,39 @@
     </div>
   </div>
 
+  <!-- Outage banner: never render an empty system when the backend is down -->
+  {#if loadError}
+    <div
+      class="flex flex-wrap items-center justify-between gap-3 border border-[var(--status-danger)]/60 bg-[var(--status-danger)]/10 chamfer-sm px-3 py-3 font-code text-xs text-[var(--status-danger)]"
+      role="alert"
+    >
+      <span class="flex items-center gap-2 min-w-0">
+        <AlertTriangle class="w-4 h-4 shrink-0" />
+        <span class="break-words">Backend unreachable: {loadError}</span>
+      </span>
+      <button
+        type="button"
+        onclick={loadDashboard}
+        class="shrink-0 px-3 py-2 font-hud font-bold border border-current chamfer-sm"
+      >
+        RETRY
+      </button>
+    </div>
+  {:else if loading}
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {#each Array(4) as _}
+        <div class="border border-[var(--border-color)] bg-[var(--bg-surface)]/60 chamfer p-4 h-28 animate-pulse"></div>
+      {/each}
+    </div>
+  {/if}
+
   <!-- Metric HUD Cards -->
   <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
     <CyberCard code="METRIC.01" title="LLM PROVIDERS">
       <div class="flex items-center justify-between">
         <div>
           <div class="text-3xl font-hud font-black text-[var(--accent-primary)]">
-            {providers.length}
+            {stats?.providers ?? 0}
           </div>
           <div class="text-[11px] text-[var(--text-muted)] mt-1">Omnirouter / Ollama Vaults</div>
         </div>
@@ -133,7 +179,7 @@
       <div class="flex items-center justify-between">
         <div>
           <div class="text-3xl font-hud font-black text-[var(--accent-primary)]">
-            {agents.length}
+            {stats?.agents ?? 0}
           </div>
           <div class="text-[11px] text-[var(--text-muted)] mt-1">Dynamic Worker & QA Personas</div>
         </div>
@@ -150,7 +196,7 @@
       <div class="flex items-center justify-between">
         <div>
           <div class="text-3xl font-hud font-black text-[var(--accent-primary)]">
-            {workflows.length}
+            {stats?.workflows ?? 0}
           </div>
           <div class="text-[11px] text-[var(--text-muted)] mt-1">Cyclic LangGraph Blueprints</div>
         </div>
@@ -178,14 +224,16 @@
       <div class="mt-3 pt-2 border-t border-[var(--border-color)]/50 text-[10px]">
         {#if deviceBridge.directoryHandle}
           <span class="text-[var(--status-success)] font-semibold">Auto-write verified</span>
-        {:else}
+        {:else if deviceBridge.isSupported}
           <button
             type="button"
             onclick={() => deviceBridge.mountLocalDirectory()}
-            class="text-[var(--accent-primary)] hover:underline"
+            class="text-[var(--accent-primary)] underline underline-offset-2 py-1"
           >
             Mount Local Drive &rarr;
           </button>
+        {:else}
+          <span class="text-[var(--text-muted)]">Artifacts download to this device</span>
         {/if}
       </div>
     </CyberCard>
@@ -197,6 +245,11 @@
     <div class="lg:col-span-2 space-y-4">
       <CyberCard code="REGISTRY.01" title="INSTANTIATED DYNAMIC AGENT ROSTER">
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {#if !loadError && agents.length === 0}
+            <div class="col-span-full text-xs text-[var(--text-muted)] italic py-6 text-center">
+              No agents assembled yet. Open Agent Studio to create your first persona.
+            </div>
+          {/if}
           {#each agents as agent}
             <div class="border border-[var(--border-color)] bg-[var(--bg-elevated)]/50 p-3 chamfer-sm space-y-2">
               <div class="flex items-center justify-between">
@@ -220,7 +273,11 @@
     <div>
       <CyberCard code="TELEMETRY.02" title="RECENT EXECUTIONS">
         <div class="space-y-3">
-          {#if executions.length === 0}
+          {#if loadError}
+            <div class="text-xs text-[var(--status-danger)] italic py-6 text-center">
+              Execution history unavailable while the backend is offline.
+            </div>
+          {:else if executions.length === 0}
             <div class="text-xs text-[var(--text-muted)] italic py-6 text-center">
               No executions yet. Run quick launch above!
             </div>
