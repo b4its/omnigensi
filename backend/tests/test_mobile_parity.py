@@ -45,6 +45,11 @@ async def test_client_config_bootstrap():
         assert features["mcp_servers"] is True
         assert features["file_download"] is True
         assert features["file_upload"] is False
+        # Capabilities added for mobile parity must be discoverable.
+        assert features["stats"] is True
+        assert features["provider_test"] is True
+        assert features["execution_filters"] is True
+        assert features["stream_resume"] is True
 
         assert data["pagination"]["default_limit"] == DEFAULT_LIMIT
         assert data["pagination"]["max_limit"] == MAX_LIMIT

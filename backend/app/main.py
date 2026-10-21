@@ -165,6 +165,10 @@ async def client_config(request: Request) -> ClientConfigResponse:
             "mcp_servers": True,
             "file_download": True,
             "file_upload": False,
+            "stats": True,
+            "provider_test": True,
+            "execution_filters": True,
+            "stream_resume": True,
         },
         limits={"executions_page_size": 50, "max_page_size": 200},
     )

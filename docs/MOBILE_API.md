@@ -125,6 +125,42 @@ Invalid ranges (> 200 or <= 0) return `422 validation_error`.
 
 Applies to: `/providers`, `/agents`, `/workflows`, `/executions`.
 
+All pagination headers are listed in CORS `expose_headers`, so browser and
+WebView clients can read them cross-origin (native HTTP clients do not need
+this).
+
+`GET /executions` additionally accepts filters, applied to both the page and
+`X-Total-Count`:
+
+| Param | Meaning |
+|---|---|
+| `status` | `completed`, `failed`, `running`, `pending`, `waiting_approval`, `cancelled` |
+| `workflow_id` | Only executions of one workflow (UUID; malformed -> 422) |
+
+---
+
+## 4b. Dashboard statistics
+
+```
+GET /api/v1/stats
+```
+
+```json
+{
+  "providers": 2, "providers_active": 2, "agents": 5, "workflows": 2,
+  "executions": {
+    "total": 59, "completed": 25, "failed": 0, "running": 2,
+    "pending": 0, "waiting_approval": 0, "cancelled": 32
+  },
+  "total_tokens": 12319, "estimated_cost_usd": 0.009596,
+  "mcp_servers": 2, "mcp_servers_enabled": 2, "tools_available": 11,
+  "generated_at": "2026-10-21T14:13:58+00:00"
+}
+```
+
+Use this for any home/dashboard screen. Do **not** page through collections to
+count rows: that costs N requests and silently under-reports past one page.
+
 ---
 
 ## 5. Resources
@@ -143,6 +179,30 @@ Applies to: `/providers`, `/agents`, `/workflows`, `/executions`.
 `PUT /providers/{id}` is a partial update. **Omit `api_key`** to keep the stored
 key; send it only when rotating. `has_api_key` reports whether a key exists —
 the key itself is never returned.
+
+### Provider connection test
+
+`GET /providers/{id}/models` **falls back to a canned model list** when the
+provider is unreachable, so it can never be used to detect a bad key. Use the
+dedicated probe instead:
+
+```
+POST /api/v1/providers/{id}/test
+```
+
+```json
+// healthy
+{ "ok": true, "status_code": 200, "checked_url": "https://openrouter.ai/api/v1/models",
+  "model_count": 468, "latency_ms": 3223, "error": null }
+
+// unreachable / bad key
+{ "ok": false, "status_code": null, "checked_url": null,
+  "model_count": 0, "latency_ms": 5, "error": "All connection attempts failed" }
+```
+
+`401`/`403` from the provider is reported as `ok: false` with an
+"Authentication failed" message. A successful probe returns `ok: true` and the
+discovered model count.
 
 ### MCP server management
 
@@ -222,16 +282,39 @@ Frames use the standard `event:` / `data:` form; `data` is always JSON.
 | `workflow_complete` | `final_output`, `generated_files`, `total_tokens`, `estimated_cost_usd` |
 | `workflow_failed` | `status`, `error` |
 
+Every frame carries a monotonically increasing `id:`:
+
+```
+event: agent_start
+id: 5
+data: {"node_id": "1", "agent_name": "Architect"}
+```
+
+### Reconnecting without losing telemetry
+
+Mobile networks drop connections constantly. Record the last `id:` you saw and
+send it back as `Last-Event-ID` when reconnecting:
+
+```
+GET /api/v1/executions/{execution_id}/stream
+Last-Event-ID: 5
+```
+
+The server replays the persisted event history after that cursor before
+continuing live (the `connected` frame reports `resumed_from`). A client that
+omits the header simply starts from the beginning.
+
 Notes for native clients, which have no `EventSource`:
 
 - Parse the stream manually (or with an SSE library) over a long-lived HTTP
   connection. Do **not** buffer the whole response.
 - The server sends `: ping` comments while idle — ignore lines starting with `:`.
-- The stream closes after `workflow_complete` / `workflow_failed`. Implement
-  your own reconnect with backoff, and re-fetch `GET /executions/{id}` on
-  reconnect to rehydrate state (the stream has no replay/`Last-Event-ID`).
+- The stream closes after `workflow_complete` / `workflow_failed`. Reconnect
+  with exponential backoff (the web UI uses 1s..15s, 5 attempts, then offers a
+  manual retry) and re-send `Last-Event-ID`.
 - If the execution already finished, the stream replays a single terminal event,
   so subscribing after the fact is always safe.
+- Cap your local telemetry buffer; long runs produce hundreds of frames.
 
 ### Human-in-the-loop approval
 
@@ -290,6 +373,9 @@ instead of writing to the device filesystem.
 | MCP tool discovery & execution | ✅ | ✅ | ✅ |
 | Artifact download | ✅ (browser) | ✅ | **use `/files`** |
 | Local disk write | Chromium only | n/a | not supported by design |
-| Pagination | ✅ | ✅ | ✅ |
+| Pagination (+filters on executions) | ✅ | ✅ | ✅ |
+| Dashboard aggregate stats | ✅ | `GET /stats` | ✅ |
+| Provider connection test | ✅ | `POST /providers/{id}/test` | ✅ |
+| SSE resume via Last-Event-ID | ✅ | ✅ | ✅ (implement backoff) |
 | Uniform errors | ✅ | ✅ | ✅ |
 | Auth / multi-tenant | ❌ | ❌ | not implemented |
