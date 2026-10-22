@@ -62,6 +62,7 @@ services:
       - omnigensi_workspace:/app/workspace
       # Live-reload source mount (development only)
       - ./backend/app:/app/app:ro
+      - ./backend/tests:/app/tests:ro
     depends_on:
       postgres:
         condition: service_healthy

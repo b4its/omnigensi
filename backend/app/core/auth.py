@@ -231,8 +231,10 @@ def token_from_request(headers, cookies, query_params, allow_query: bool = True)
 
 
 def is_public_path(path: str) -> bool:
-    """True when the path needs no session (health, docs, login)."""
+    """True when the path needs no operator session (health, docs, login, external integrations)."""
     normalized = path.rstrip("/") or "/"
+    if normalized.startswith("/api/v1/integrations/v1"):
+        return True
     for public in PUBLIC_PATHS:
         candidate = public.rstrip("/") or "/"
         if normalized == candidate:

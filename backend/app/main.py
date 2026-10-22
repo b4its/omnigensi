@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import text
+from sqlalchemy import select, text
 import redis.asyncio as aioredis
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -37,6 +37,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.files import router as files_router
 from app.api.v1.chat import router as chat_router
 from app.api.v1.stats import router as stats_router
+from app.api.v1.integrations import router as integrations_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -135,6 +136,25 @@ async def require_session(request: Request, call_next):
             )
             authenticated = False
 
+    # External integration clients can authenticate via X-API-Key
+    if not authenticated and request.headers.get("x-api-key"):
+        api_key = request.headers.get("x-api-key", "").strip()
+        if api_key:
+            try:
+                from app.models.integration_client import IntegrationClient
+                async with AsyncSessionLocal() as db:
+                    client_match = await db.scalar(
+                        select(IntegrationClient).where(
+                            IntegrationClient.api_key == api_key,
+                            IntegrationClient.is_active.is_(True),
+                        )
+                    )
+                    if client_match:
+                        authenticated = True
+                        request.state.external_client = client_match
+            except Exception as exc:
+                logger.error("Could not verify integration client API key: %s", exc)
+
     if not authenticated:
         # This middleware sits outside the request-id middleware, so the id is
         # minted here too: a 401 must be correlatable like every other error.
@@ -200,6 +220,7 @@ app.include_router(mcp_router, prefix=settings.API_V1_STR)
 app.include_router(stats_router, prefix=settings.API_V1_STR)
 app.include_router(files_router, prefix=settings.API_V1_STR)
 app.include_router(chat_router, prefix=settings.API_V1_STR)
+app.include_router(integrations_router, prefix=settings.API_V1_STR)
 
 # Also mount /api/v1/workflows/{id}/execute directly matching PRD table
 app.add_api_route(
@@ -313,6 +334,7 @@ async def client_config(request: Request) -> ClientConfigResponse:
             "agent_duplicate": True,
             "workflow_duplicate": True,
             "tool_execution": True,
+            "integrations": True,
         },
         limits={"executions_page_size": 50, "max_page_size": 200},
         auth={
