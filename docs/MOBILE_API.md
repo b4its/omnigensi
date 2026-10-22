@@ -17,7 +17,7 @@ The whole instance is guarded by **one shared operator password**
 
 | Request | Purpose |
 |---|---|
-| `POST /api/v1/auth/login` `{"password": "..."}` | `200` + token, `401` on a wrong password |
+| `POST /api/v1/auth/login` `{"password": "..."}` | `200` + token, `401` wrong password, `429` throttled |
 | `POST /api/v1/auth/logout` | Clears the session cookie |
 | `GET  /api/v1/auth/session` | Reports `{authenticated, auth_enabled}` (public) |
 
@@ -54,10 +54,18 @@ Token precedence is Bearer → query → cookie.
   screen again. The web UI does this centrally.
 - Every authenticated request may be rejected at any time (expiry, secret
   rotation), so always handle 401 rather than assuming a session is permanent.
+- **Brute-force protection:** after 5 failed logins within 5 minutes the
+  client address is locked out with exponential backoff. The endpoint returns
+  `429 rate_limited` plus a `Retry-After` header - honour it instead of
+  retrying immediately.
 - `GET /auth/session` is the cheapest way to decide whether to show a login
   prompt at startup.
 
 ### What stays public
+
+`/health` reports `status: "degraded"` with HTTP **503** when Postgres or
+Redis is unreachable (the `dependencies` map tells you which), so use it for
+readiness probes rather than assuming 200 always means healthy.
 
 `/health`, `/api/v1/health`, `/api/v1/config`, the three auth endpoints,
 `/docs`, `/redoc` and `/openapi.json`. Everything else returns `401` with the
@@ -68,6 +76,16 @@ standard error envelope:
 ```
 
 `AUTH_ENABLED=false` disables the gate entirely (local experiments only).
+
+### Execution quality flags
+
+`ExecutionResponse` (and the SSE `workflow_complete` payload) carry:
+
+- `error_message` - structured failure/cancel reason. `final_output` is
+  reserved for actual content, so never parse it for errors.
+- `simulated: true` - a provider call failed and the engine substituted
+  template content. Show this prominently; the run is **not** a genuine model
+  result. Treat `simulated` plus `completed` as a degraded run.
 
 ---
 
