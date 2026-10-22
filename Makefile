@@ -11,9 +11,16 @@ SHELL := /bin/bash
 # -----------------------------------------------------------------------------
 # Konfigurasi
 # -----------------------------------------------------------------------------
-COMPOSE        ?= docker compose
-COMPOSE_FILE   ?= docker-compose.yml
-COMPOSE_PROD   ?= docker compose -f docker-compose.yml -f docker-compose.prod.yml
+# Backend dijalankan dengan akses jaringan host (network_mode: host) supaya
+# provider lokal seperti 9router (localhost:20128) dan Ollama (localhost:11434)
+# bisa dijangkau dari dalam container. Override ini SELALU ikut agar `make up`,
+# `make down`, logs, status, dll. memakai konfigurasi yang sama.
+COMPOSE_FILE_LIST ?= docker-compose.yml docker-compose.hostnet.yml
+COMPOSE_OVERRIDES := $(foreach f,$(COMPOSE_FILE_LIST),-f $(f))
+
+COMPOSE        ?= docker compose $(COMPOSE_OVERRIDES)
+COMPOSE_FILE   ?= $(COMPOSE_FILE_LIST)
+COMPOSE_PROD   ?= docker compose $(COMPOSE_OVERRIDES) -f docker-compose.prod.yml
 
 BACKEND_SVC    := backend
 FRONTEND_SVC   := frontend

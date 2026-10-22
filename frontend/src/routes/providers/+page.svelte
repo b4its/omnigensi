@@ -38,7 +38,13 @@
   let providerHealth = $state<
     Record<string, { ok: boolean; latency_ms: number; model_count: number; error?: string | null }>
   >({});
-  let selectedProviderModels = $state<{ providerName: string; models: any[] } | null>(null);
+  let selectedProviderModels = $state<{
+    providerId: string;
+    providerName: string;
+    defaultModel: string | null;
+    models: any[];
+  } | null>(null);
+  let pickingModel = $state<string | null>(null);
   let selectedMcpTools = $state<{ serverName: string; tools: any[] } | null>(null);
   let mcpLoading = $state<Record<string, boolean>>({});
   let mcpToolRunning = $state<string | null>(null);
@@ -382,22 +388,69 @@
   async function handleSyncModels(provider: any) {
     syncLoading[provider.id] = true;
     try {
-      const models = await api.getProviderModels(provider.id);
+      const res = await api.syncProviderModels(provider.id);
+      if (!res.ok) {
+        notify.error(`${provider.name}: sync failed - ${res.error ?? 'could not reach provider'}`);
+        return;
+      }
+      notify.success(
+        `${provider.name}: ${res.added} added, ${res.updated} updated (${res.total_stored} total)`
+      );
+      // Reload the registry so the picker reflects what was just synced.
+      const models = await api.getProviderModelRegistry(provider.id);
       selectedProviderModels = {
+        providerId: provider.id,
         providerName: provider.name,
+        defaultModel: provider.default_model ?? null,
         models,
       };
+      // Refresh the card so default_model / registry counts update.
+      await loadProviders();
     } catch (err: any) {
-      notify.fromError(err, "Failed to fetch models");
+      notify.fromError(err, 'Model sync failed');
     } finally {
       syncLoading[provider.id] = false;
     }
   }
 
+  /** Persist a model as the provider default, then reflect it in the modal. */
+  async function handlePickModel(modelId: string, verify = true) {
+    if (!selectedProviderModels) return;
+    const pid = selectedProviderModels.providerId;
+    pickingModel = modelId;
+    try {
+      await api.setDefaultProviderModel(pid, modelId, verify);
+      selectedProviderModels.defaultModel = modelId;
+      selectedProviderModels.models = selectedProviderModels.models.map((m: any) => ({
+        ...m,
+        is_default: m.model_id === modelId,
+      }));
+      notify.success(`Default model set to ${modelId}`);
+      await loadProviders();
+    } catch (err: any) {
+      // A 422 means the model could not answer a test completion. Offer to
+      // save it anyway so an operator can force a known-cold model.
+      const msg = err?.message ?? 'Could not set the default model';
+      if (verify && /did not answer|verify=false/i.test(msg)) {
+        const force = await notify.confirm({
+          title: 'MODEL FAILED TEST',
+          message: `${modelId} did not answer a test completion.\n\n${msg}\n\nSave it as the default anyway?`,
+          confirmLabel: 'SAVE ANYWAY',
+        });
+        if (force) return handlePickModel(modelId, false);
+      } else {
+        notify.error(msg);
+      }
+    } finally {
+      pickingModel = null;
+    }
+  }
+
   const filteredModels = $derived(
-    selectedProviderModels?.models.filter(m =>
-      m.id.toLowerCase().includes(modelSearch.toLowerCase()) ||
-      (m.name && m.name.toLowerCase().includes(modelSearch.toLowerCase()))
+    selectedProviderModels?.models.filter(
+      (m: any) =>
+        (m.model_id ?? '').toLowerCase().includes(modelSearch.toLowerCase()) ||
+        (m.display_name ?? '').toLowerCase().includes(modelSearch.toLowerCase())
     ) || []
   );
 </script>
@@ -475,6 +528,16 @@
               </span>
             </div>
 
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-[var(--text-muted)]">Model:</span>
+              <span
+                class="font-code truncate max-w-[220px] {prov.default_model ? 'text-[var(--accent-primary)]' : 'text-[var(--text-muted)]'}"
+                title={prov.default_model ?? 'No model selected'}
+              >
+                {prov.default_model ?? 'none selected'}
+              </span>
+            </div>
+
             {#if providerHealth[prov.id]}
               <div class="flex items-center justify-between text-xs">
                 <span class="text-[var(--text-muted)]">Connectivity:</span>
@@ -497,6 +560,7 @@
                   type="button"
                   disabled={syncLoading[prov.id]}
                   onclick={() => handleSyncModels(prov)}
+                  title="Sync the provider's model list, then pick the default model"
                   class="inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-hud text-[var(--accent-primary)] border border-[var(--accent-primary)]/40 hover:bg-[var(--accent-primary)]/10 chamfer-sm transition-colors cursor-pointer disabled:opacity-50"
                 >
                   <RefreshCw class="w-3.5 h-3.5 {syncLoading[prov.id] ? 'animate-spin' : ''}" />
@@ -820,10 +884,11 @@
         <div class="flex items-center justify-between p-4 border-b border-[var(--border-color)] bg-[var(--bg-elevated)]/60">
           <div>
             <div class="font-hud font-bold text-sm text-[var(--text-primary)]">
-              AVAILABLE MODELS // {selectedProviderModels.providerName}
+              SELECT MODEL // {selectedProviderModels.providerName}
             </div>
             <div class="text-[10px] text-[var(--text-muted)] font-code">
-              {selectedProviderModels.models.length} models discovered via /models endpoint
+              {selectedProviderModels.models.length} models synced ·
+              default: <span class="text-[var(--accent-primary)]">{selectedProviderModels.defaultModel ?? 'none'}</span>
             </div>
           </div>
           <button
@@ -849,20 +914,48 @@
         </div>
 
         <div class="flex-1 p-4 overflow-y-auto space-y-2">
-          {#each filteredModels as model}
-            <div class="border border-[var(--border-color)]/60 bg-[var(--bg-elevated)]/40 p-2.5 rounded-sm flex items-center justify-between font-code text-xs">
-              <div>
-                <div class="font-bold text-[var(--text-primary)]">{model.id}</div>
-                {#if model.name && model.name !== model.id}
-                  <div class="text-[10px] text-[var(--text-muted)]">{model.name}</div>
+          {#if filteredModels.length === 0}
+            <p class="text-center text-xs font-code text-[var(--text-muted)] py-6">
+              No models match "{modelSearch}".
+            </p>
+          {/if}
+          {#each filteredModels as model (model.model_id)}
+            <button
+              type="button"
+              onclick={() => handlePickModel(model.model_id)}
+              disabled={pickingModel !== null || model.is_available === false}
+              class="w-full text-left border p-2.5 rounded-sm flex items-center justify-between font-code text-xs transition-colors cursor-pointer disabled:cursor-not-allowed {model.is_default
+                ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/15'
+                : 'border-[var(--border-color)]/60 bg-[var(--bg-elevated)]/40 hover:border-[var(--accent-primary)]/60'}"
+            >
+              <div class="min-w-0">
+                <div class="font-bold {model.is_default ? 'text-[var(--accent-primary)]' : 'text-[var(--text-primary)]'} truncate">
+                  {model.model_id}
+                </div>
+                {#if model.display_name && model.display_name !== model.model_id}
+                  <div class="text-[10px] text-[var(--text-muted)] truncate">{model.display_name}</div>
+                {/if}
+                {#if model.is_available === false}
+                  <div class="text-[10px] text-[var(--status-danger)]">unavailable</div>
                 {/if}
               </div>
-              {#if model.context_length}
-                <span class="text-[10px] text-[var(--accent-primary)] px-2 py-0.5 rounded bg-[var(--accent-primary)]/10">
-                  {Math.round(model.context_length / 1000)}k ctx
-                </span>
-              {/if}
-            </div>
+              <div class="flex items-center gap-2 shrink-0">
+                {#if model.context_length}
+                  <span class="text-[10px] text-[var(--accent-primary)] px-2 py-0.5 rounded bg-[var(--accent-primary)]/10">
+                    {Math.round(model.context_length / 1000)}k ctx
+                  </span>
+                {/if}
+                {#if pickingModel === model.model_id}
+                  <Loader2 class="w-4 h-4 animate-spin text-[var(--accent-primary)]" />
+                {:else if model.is_default}
+                  <span class="flex items-center gap-1 text-[10px] font-bold text-[var(--accent-primary)]">
+                    <CheckCircle class="w-3.5 h-3.5" /> SELECTED
+                  </span>
+                {:else}
+                  <span class="text-[10px] font-hud text-[var(--text-muted)]">SELECT</span>
+                {/if}
+              </div>
+            </button>
           {/each}
         </div>
       </div>

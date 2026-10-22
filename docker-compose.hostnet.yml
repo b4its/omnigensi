@@ -1,0 +1,28 @@
+# Override agar backend bisa menjangkau proses yang berjalan di HOST
+# (mis. 9router / Ollama di localhost), yang tidak bisa diakses lewat
+# bridge network di mesin ini (container -> host gateway diblokir).
+#
+# Pakai:
+#   docker compose -f docker-compose.yml -f docker-compose.hostnet.yml up -d
+#
+# Karena backend memakai network_mode host, nama service `postgres`/`redis`
+# tidak resolve lagi; backend harus memakai port yang di-publish ke host.
+services:
+  backend:
+    # Backend berbagi stack jaringan host, sehingga localhost:20128 (9router)
+    # dan localhost:11434 (Ollama) langsung terjangkau.
+    network_mode: host
+    # network_mode host tidak kompatibel dengan daftar networks milik base file.
+    networks: !reset []
+    # Port sudah dipegang langsung oleh proses di host; pemetaan ini tidak berlaku
+    # dan dihapus agar tidak memicu konflik.
+    ports: !reset []
+    environment:
+      # Service DNS (postgres/redis) tidak tersedia di mode host.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-omnigensi}:${POSTGRES_PASSWORD:-omnigensi_secret}@127.0.0.1:${POSTGRES_PORT:-5558}/${POSTGRES_DB:-omnigensi}
+      REDIS_URL: redis://127.0.0.1:${REDIS_PORT:-6505}/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy

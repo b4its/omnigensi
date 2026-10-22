@@ -254,6 +254,92 @@ async def test_selecting_unknown_model_is_rejected(stub_network):
 
 
 @pytest.mark.asyncio
+async def test_default_model_must_answer_a_completion(stub_network, monkeypatch):
+    """A listed model whose upstream fails must not become the default."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json=MODELS_PAYLOAD)
+        # Chat completions fail: upstream out of credits / bad auth.
+        return httpx.Response(
+            503, json={"error": {"message": "no credits remaining"}}
+        )
+
+    monkeypatch.setattr(
+        provider_probe.httpx, "AsyncClient", _mock_client_factory(handler)
+    )
+    async with _client() as client:
+        provider = await _create_provider(client, "broken-default-provider")
+        pid = provider["id"]
+        try:
+            await client.post(f"/api/v1/providers/{pid}/models/sync")
+            before = (await client.get(f"/api/v1/providers/{pid}")).json()["default_model"]
+
+            resp = await client.put(
+                f"/api/v1/providers/{pid}/default-model", json={"model_id": "fake-large"}
+            )
+            assert resp.status_code == 422
+            detail = resp.json()["detail"]
+            assert "did not answer a test completion" in detail
+            assert "no credits remaining" in detail
+
+            # The selection was not persisted.
+            after = (await client.get(f"/api/v1/providers/{pid}")).json()["default_model"]
+            assert after == before
+        finally:
+            await client.delete(f"/api/v1/providers/{pid}")
+
+
+@pytest.mark.asyncio
+async def test_default_model_verification_can_be_skipped(stub_network, monkeypatch):
+    """Operators can force a selection when the upstream is intentionally cold."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json=MODELS_PAYLOAD)
+        return httpx.Response(503, json={"error": {"message": "cold"}})
+
+    monkeypatch.setattr(
+        provider_probe.httpx, "AsyncClient", _mock_client_factory(handler)
+    )
+    async with _client() as client:
+        provider = await _create_provider(client, "skip-verify-provider")
+        pid = provider["id"]
+        try:
+            await client.post(f"/api/v1/providers/{pid}/models/sync")
+            resp = await client.put(
+                f"/api/v1/providers/{pid}/default-model",
+                json={"model_id": "fake-large", "verify": False},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["is_default"] is True
+            refreshed = (await client.get(f"/api/v1/providers/{pid}")).json()
+            assert refreshed["default_model"] == "fake-large"
+        finally:
+            await client.delete(f"/api/v1/providers/{pid}")
+
+
+@pytest.mark.asyncio
+async def test_resync_keeps_a_healthy_default(stub_network):
+    """Re-syncing must not clobber a working selection with a fresh pick."""
+    async with _client() as client:
+        provider = await _create_provider(client, "keep-default-provider")
+        pid = provider["id"]
+        try:
+            await client.post(f"/api/v1/providers/{pid}/models/sync")
+            await client.put(
+                f"/api/v1/providers/{pid}/default-model", json={"model_id": "fake-large"}
+            )
+            await client.post(f"/api/v1/providers/{pid}/models/sync")
+
+            refreshed = (await client.get(f"/api/v1/providers/{pid}")).json()
+            assert refreshed["default_model"] == "fake-large"
+        finally:
+            await client.delete(f"/api/v1/providers/{pid}")
+
+
+
+@pytest.mark.asyncio
 async def test_chat_test_returns_real_response(stub_network):
     async with _client() as client:
         provider = await _create_provider(client, "chat-provider")
@@ -422,3 +508,214 @@ async def test_deleting_provider_cascades_models(stub_network):
 
         # The provider (and therefore its registry) is gone.
         assert (await client.get(f"/api/v1/providers/{pid}")).status_code == 404
+
+
+def _mutable_models_handler(models: Dict[str, Any]):
+    """Handler whose /models list is read from ``models['ids']`` each call."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(
+                200,
+                json={"data": [{"id": mid, "context_length": 4096} for mid in models["ids"]]},
+            )
+        if request.url.path.endswith("/chat/completions"):
+            body = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": f"REPLY[{body['model']}]"}}]},
+            )
+        return httpx.Response(404, json={"error": "unexpected path"})
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_sync_default_only_marks_vanished_models():
+    """Without prune, a model that disappears is flagged, not deleted."""
+    state = {"ids": ["m-a", "m-b"]}
+    async with _client() as client:
+        provider = await _create_provider(client, "mark-only-provider")
+        pid = provider["id"]
+        try:
+            from app.engine import provider_probe as pp
+
+            pp.httpx.AsyncClient = _mock_client_factory(_mutable_models_handler(state))
+            first = (await client.post(f"/api/v1/providers/{pid}/models/sync")).json()
+            assert first["added"] == 2 and first["removed"] == 0
+
+            state["ids"] = ["m-a"]
+            second = (await client.post(f"/api/v1/providers/{pid}/models/sync")).json()
+            assert second["marked_unavailable"] == 1
+            assert second["removed"] == 0
+            assert second["total_stored"] == 2
+
+            registry = (await client.get(f"/api/v1/providers/{pid}/model-registry")).json()
+            rows = {r["model_id"]: r["is_available"] for r in registry}
+            assert rows == {"m-a": True, "m-b": False}
+        finally:
+            await client.delete(f"/api/v1/providers/{pid}")
+
+
+@pytest.mark.asyncio
+async def test_sync_prune_deletes_vanished_models():
+    """prune=true removes rows the provider no longer reports."""
+    state = {"ids": ["m-a", "m-b"]}
+    async with _client() as client:
+        provider = await _create_provider(client, "prune-provider")
+        pid = provider["id"]
+        try:
+            from app.engine import provider_probe as pp
+
+            pp.httpx.AsyncClient = _mock_client_factory(_mutable_models_handler(state))
+            await client.post(f"/api/v1/providers/{pid}/models/sync")
+
+            state["ids"] = ["m-a"]
+            pruned = (
+                await client.post(f"/api/v1/providers/{pid}/models/sync?prune=true")
+            ).json()
+            assert pruned["removed"] == 1
+            assert pruned["total_stored"] == 1
+
+            registry = (await client.get(f"/api/v1/providers/{pid}/model-registry")).json()
+            assert {r["model_id"] for r in registry} == {"m-a"}
+        finally:
+            await client.delete(f"/api/v1/providers/{pid}")
+
+
+@pytest.mark.asyncio
+async def test_sync_prune_keeps_the_default_model():
+    """The current default is never pruned, even if it vanished upstream."""
+    state = {"ids": ["m-a", "m-b"]}
+    async with _client() as client:
+        provider = await _create_provider(client, "prune-keeps-default")
+        pid = provider["id"]
+        try:
+            from app.engine import provider_probe as pp
+
+            pp.httpx.AsyncClient = _mock_client_factory(_mutable_models_handler(state))
+            await client.post(f"/api/v1/providers/{pid}/models/sync")
+            await client.put(
+                f"/api/v1/providers/{pid}/default-model", json={"model_id": "m-b"}
+            )
+
+            state["ids"] = ["m-a"]
+            pruned = (
+                await client.post(f"/api/v1/providers/{pid}/models/sync?prune=true")
+            ).json()
+            assert pruned["removed"] == 0
+            registry = (await client.get(f"/api/v1/providers/{pid}/model-registry")).json()
+            assert "m-b" in {r["model_id"] for r in registry}
+            refreshed = (await client.get(f"/api/v1/providers/{pid}")).json()
+            assert refreshed["default_model"] == "m-b"
+        finally:
+            await client.delete(f"/api/v1/providers/{pid}")
+
+
+@pytest.mark.asyncio
+async def test_sync_prune_survives_failed_discovery(monkeypatch):
+    """A provider outage must never wipe the registry, even with prune."""
+    state = {"ids": ["m-a"]}
+    async with _client() as client:
+        provider = await _create_provider(client, "prune-outage-provider")
+        pid = provider["id"]
+        try:
+            from app.engine import provider_probe as pp
+
+            pp.httpx.AsyncClient = _mock_client_factory(_mutable_models_handler(state))
+            await client.post(f"/api/v1/providers/{pid}/models/sync")
+
+            def boom(request: httpx.Request) -> httpx.Response:
+                raise httpx.ConnectError("down", request=request)
+
+            pp.httpx.AsyncClient = _mock_client_factory(boom)
+            result = (
+                await client.post(f"/api/v1/providers/{pid}/models/sync?prune=true")
+            ).json()
+            assert result["ok"] is False
+            assert result["removed"] == 0
+            registry = (await client.get(f"/api/v1/providers/{pid}/model-registry")).json()
+            assert {r["model_id"] for r in registry} == {"m-a"}
+        finally:
+            await client.delete(f"/api/v1/providers/{pid}")
+
+
+@pytest.mark.asyncio
+async def test_delete_single_model_and_protects_default(stub_network):
+    async with _client() as client:
+        provider = await _create_provider(client, "delete-single-provider")
+        pid = provider["id"]
+        try:
+            await client.post(f"/api/v1/providers/{pid}/models/sync")
+            default = (await client.get(f"/api/v1/providers/{pid}")).json()["default_model"]
+            other = "fake-large" if default == "fake-small" else "fake-small"
+
+            # The auto-picked default is protected
+            resp = await client.delete(f"/api/v1/providers/{pid}/models/{default}")
+            assert resp.status_code == 409
+
+            # The non-default model can be removed
+            resp = await client.delete(f"/api/v1/providers/{pid}/models/{other}")
+            assert resp.status_code == 204
+            registry = (await client.get(f"/api/v1/providers/{pid}/model-registry")).json()
+            assert {r["model_id"] for r in registry} == {default}
+
+            # Missing model -> 404
+            assert (
+                await client.delete(f"/api/v1/providers/{pid}/models/nope")
+            ).status_code == 404
+        finally:
+            await client.delete(f"/api/v1/providers/{pid}")
+
+
+@pytest.mark.asyncio
+async def test_prune_unavailable_endpoint():
+    state = {"ids": ["m-a", "m-b"]}
+    async with _client() as client:
+        provider = await _create_provider(client, "prune-unavailable-provider")
+        pid = provider["id"]
+        try:
+            from app.engine import provider_probe as pp
+
+            pp.httpx.AsyncClient = _mock_client_factory(_mutable_models_handler(state))
+            await client.post(f"/api/v1/providers/{pid}/models/sync")
+
+            state["ids"] = ["m-a"]
+            await client.post(f"/api/v1/providers/{pid}/models/sync")  # marks m-b unavailable
+
+            pruned = (await client.post(f"/api/v1/providers/{pid}/models/prune")).json()
+            assert pruned["removed"] == 1
+            registry = (await client.get(f"/api/v1/providers/{pid}/model-registry")).json()
+            assert {r["model_id"] for r in registry} == {"m-a"}
+        finally:
+            await client.delete(f"/api/v1/providers/{pid}")
+
+
+@pytest.mark.asyncio
+async def test_sync_preserves_operator_default_even_without_row_flag():
+    """provider.default_model is the source of truth across syncs."""
+    state = {"ids": ["m-a", "m-b", "m-c"]}
+    async with _client() as client:
+        provider = await _create_provider(client, "preserve-default-provider")
+        pid = provider["id"]
+        try:
+            from app.engine import provider_probe as pp
+
+            pp.httpx.AsyncClient = _mock_client_factory(_mutable_models_handler(state))
+            await client.post(f"/api/v1/providers/{pid}/models/sync")
+
+            # Operator picks a non-first model.
+            await client.put(
+                f"/api/v1/providers/{pid}/default-model", json={"model_id": "m-c"}
+            )
+
+            # A later sync (no pruning, list unchanged) must keep that choice.
+            await client.post(f"/api/v1/providers/{pid}/models/sync")
+            refreshed = (await client.get(f"/api/v1/providers/{pid}")).json()
+            assert refreshed["default_model"] == "m-c"
+
+            registry = (await client.get(f"/api/v1/providers/{pid}/model-registry")).json()
+            defaults = [r["model_id"] for r in registry if r["is_default"]]
+            assert defaults == ["m-c"]
+        finally:
+            await client.delete(f"/api/v1/providers/{pid}")

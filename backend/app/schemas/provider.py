@@ -79,6 +79,11 @@ class ModelSyncResult(BaseModel):
     added: int = Field(ge=0)
     updated: int = Field(ge=0)
     marked_unavailable: int = Field(ge=0)
+    removed: int = Field(
+        default=0,
+        ge=0,
+        description="Rows deleted because they no longer exist upstream (prune only)",
+    )
     total_stored: int = Field(ge=0)
     checked_url: Optional[str] = None
     latency_ms: int = 0
@@ -89,6 +94,14 @@ class SetDefaultModelRequest(BaseModel):
     """Selects which stored model is the provider default."""
 
     model_id: str = Field(..., min_length=1, max_length=255)
+    verify: bool = Field(
+        default=True,
+        description=(
+            "Run a real chat completion before saving so a model whose upstream "
+            "is out of credits or misconfigured cannot become the default. "
+            "Set false to save without verifying."
+        ),
+    )
 
 
 class ChatTestRequest(BaseModel):

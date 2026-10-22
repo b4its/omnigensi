@@ -260,8 +260,9 @@ export const api = {
 		apiFetch<void>(`/api/v1/providers/${id}`, { method: 'DELETE' }),
 	getProviderModels: (id: string) => apiFetch<any[]>(`/api/v1/providers/${id}/models`),
 
-	/** Discover and store every model the provider reports. */
-	syncProviderModels: (id: string) =>
+	/** Discover and store every model the provider reports.
+	 *  Pass prune=true to also delete stored models the provider no longer lists. */
+	syncProviderModels: (id: string, prune = false) =>
 		apiFetch<{
 			ok: boolean;
 			provider_id: string;
@@ -269,24 +270,40 @@ export const api = {
 			added: number;
 			updated: number;
 			marked_unavailable: number;
+			removed: number;
 			total_stored: number;
 			checked_url?: string | null;
 			latency_ms: number;
 			error?: string | null;
-		}>(`/api/v1/providers/${id}/models/sync`, {
+		}>(`/api/v1/providers/${id}/models/sync${prune ? '?prune=true' : ''}`, {
 			method: 'POST',
 			timeoutMs: 30_000
 		}),
+
+	/** Delete one stored model (fails if it is the default or an agent uses it). */
+	deleteProviderModel: (id: string, modelId: string) =>
+		apiFetch<void>(
+			`/api/v1/providers/${id}/models/${encodeURIComponent(modelId)}`,
+			{ method: 'DELETE' }
+		),
+
+	/** Delete every stored model already flagged unavailable. */
+	pruneUnavailableProviderModels: (id: string) =>
+		apiFetch<{ removed: number; total_stored: number }>(
+			`/api/v1/providers/${id}/models/prune`,
+			{ method: 'POST', timeoutMs: 30_000 }
+		),
 
 	/** Models already stored for this provider (no live call). */
 	getProviderModelRegistry: (id: string) =>
 		apiFetch<any[]>(`/api/v1/providers/${id}/model-registry`),
 
 	/** Choose which stored model the provider should use by default. */
-	setDefaultProviderModel: (id: string, modelId: string) =>
+	setDefaultProviderModel: (id: string, modelId: string, verify = true) =>
 		apiFetch<any>(`/api/v1/providers/${id}/default-model`, {
 			method: 'PUT',
-			body: JSON.stringify({ model_id: modelId })
+			body: JSON.stringify({ model_id: modelId, verify }),
+			timeoutMs: verify ? 60_000 : undefined
 		}),
 
 	/** Probe unsaved credentials during registration. */

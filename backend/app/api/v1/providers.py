@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import encrypt_api_key, decrypt_api_key
 from app.engine.provider_probe import discover_models, probe_chat
+from app.models.agent import AgentTemplate
 from app.models.provider import LLMProvider
 from app.models.provider_model import ProviderModel
 from app.schemas.provider import (
@@ -303,13 +304,29 @@ async def _stored_models(db: AsyncSession, provider_id: uuid.UUID) -> List[Provi
     return list(result.scalars().all())
 
 
-async def _sync_provider_models(
-    db: AsyncSession, provider: LLMProvider
-) -> ModelSyncResult:
-    """Upsert the provider's models and flag the ones that disappeared.
+async def _models_in_use(db: AsyncSession) -> set[tuple[uuid.UUID, str]]:
+    """``(provider_id, model_name)`` pairs an agent template depends on."""
+    result = await db.execute(select(AgentTemplate.provider_id, AgentTemplate.model_name))
+    return {(row[0], row[1]) for row in result.all() if row[0] and row[1]}
 
-    Rows are never deleted: an agent may already reference a model, and a
-    transient outage should not destroy the operator's selection.
+
+async def _sync_provider_models(
+    db: AsyncSession, provider: LLMProvider, prune: bool = False
+) -> ModelSyncResult:
+    """Upsert the provider's models and optionally prune vanished ones.
+
+    By default rows are only flagged ``is_available=False`` when a model
+    disappears upstream: an agent may still reference it, and a transient
+    outage must not destroy the operator's selection.
+
+    With ``prune=True`` those vanished rows are deleted from the database
+    instead. Two guards keep this safe even then:
+
+    * the provider's current default model is never pruned, and
+    * any model referenced by an agent template is never pruned.
+
+    Pruning only runs on a successful discovery, so a provider that is down
+    can never wipe the registry.
     """
     discovery = await discover_models(
         provider.base_url,
@@ -324,6 +341,7 @@ async def _sync_provider_models(
             added=0,
             updated=0,
             marked_unavailable=0,
+            removed=0,
             total_stored=len(await _stored_models(db, provider.id)),
             checked_url=discovery.checked_url,
             latency_ms=discovery.latency_ms,
@@ -359,23 +377,54 @@ async def _sync_provider_models(
             row.is_available = True
             updated += 1
 
+    vanished = {mid: row for mid, row in existing.items() if mid not in seen}
     marked = 0
-    for model_id, row in existing.items():
-        if model_id not in seen and row.is_available:
-            row.is_available = False
-            marked += 1
+    removed = 0
+
+    if prune:
+        # Never prune a model an agent still points at: doing so would leave
+        # the agent with a dangling model name.
+        in_use = await _models_in_use(db)
+        for model_id, row in vanished.items():
+            if row.is_default or model_id == provider.default_model:
+                continue
+            if (provider.id, model_id) in in_use:
+                continue
+            await db.delete(row)
+            removed += 1
+    else:
+        for row in vanished.values():
+            if row.is_available:
+                row.is_available = False
+                marked += 1
 
     await db.commit()
 
     stored = await _stored_models(db, provider.id)
-    # Adopt a default automatically so the picker is never empty.
-    if not any(m.is_default for m in stored) and stored:
+    # ``provider.default_model`` is the source of truth. Keep the per-row flag
+    # aligned with it so a re-sync never drifts away from the operator's pick.
+    current = next(
+        (m for m in stored if m.model_id == provider.default_model), None
+    )
+    if current is None or not current.is_available:
+        current = next((m for m in stored if m.is_default), None)
+    if current is None or not current.is_available:
+        # No usable selection: adopt one so the picker is never empty.
         available = [m for m in stored if m.is_available]
-        pick = available[0] if available else stored[0]
-        pick.is_default = True
-        provider.default_model = pick.model_id
+        pick = available[0] if available else (stored[0] if stored else None)
+        if pick is not None:
+            for row in stored:
+                row.is_default = row is pick
+            provider.default_model = pick.model_id
+            await db.commit()
+            stored = await _stored_models(db, provider.id)
+    else:
+        # Re-assert the flag in case a previous sync lost it.
+        for row in stored:
+            row.is_default = row is current
+        if provider.default_model != current.model_id:
+            provider.default_model = current.model_id
         await db.commit()
-        stored = await _stored_models(db, provider.id)
 
     return ModelSyncResult(
         ok=True,
@@ -384,6 +433,7 @@ async def _sync_provider_models(
         added=added,
         updated=updated,
         marked_unavailable=marked,
+        removed=removed,
         total_stored=len(stored),
         checked_url=discovery.checked_url,
         latency_ms=discovery.latency_ms,
@@ -403,13 +453,95 @@ async def list_provider_models(
 
 @router.post("/{provider_id}/models/sync", response_model=ModelSyncResult)
 async def sync_provider_models(
-    provider_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    provider_id: uuid.UUID,
+    prune: bool = False,
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
-    """Auto-add every model the provider reports, keeping existing rows."""
+    """Add/update every model the provider reports.
+
+    Set ``prune=true`` to also delete stored models the provider no longer
+    lists. The provider's default model and any model an agent still uses are
+    never pruned, and pruning only happens when discovery succeeds.
+    """
     provider = await db.get(LLMProvider, provider_id)
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
-    return await _sync_provider_models(db, provider)
+    return await _sync_provider_models(db, provider, prune=prune)
+
+
+@router.delete("/{provider_id}/models/{model_id:path}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_provider_model(
+    provider_id: uuid.UUID,
+    model_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Remove one stored model from a provider's registry.
+
+    Refuses to delete the current default model or one an agent template
+    still references, so a working configuration cannot be broken by accident.
+    """
+    provider = await db.get(LLMProvider, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    result = await db.execute(
+        select(ProviderModel).where(
+            ProviderModel.provider_id == provider_id,
+            ProviderModel.model_id == model_id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Model not found for this provider")
+
+    if row.is_default or provider.default_model == model_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete the provider's default model. Choose another default first.",
+        )
+    if (provider_id, model_id) in await _models_in_use(db):
+        raise HTTPException(
+            status_code=409,
+            detail="An agent template still uses this model. Reassign the agent first.",
+        )
+
+    await db.delete(row)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{provider_id}/models/prune", response_model=ModelSyncResult)
+async def prune_unavailable_models(
+    provider_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Any:
+    """Delete stored models already flagged unavailable by a previous sync."""
+    provider = await db.get(LLMProvider, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    in_use = await _models_in_use(db)
+    stored = await _stored_models(db, provider_id)
+    removed = 0
+    for row in stored:
+        if row.is_available or row.is_default or row.model_id == provider.default_model:
+            continue
+        if (provider_id, row.model_id) in in_use:
+            continue
+        await db.delete(row)
+        removed += 1
+    await db.commit()
+
+    return ModelSyncResult(
+        ok=True,
+        provider_id=provider_id,
+        discovered=0,
+        added=0,
+        updated=0,
+        marked_unavailable=0,
+        removed=removed,
+        total_stored=len(await _stored_models(db, provider_id)),
+        latency_ms=0,
+    )
 
 
 @router.put(
@@ -420,7 +552,14 @@ async def set_default_model(
     payload: SetDefaultModelRequest,
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    """Selects which stored model this provider should use by default."""
+    """Selects which stored model this provider should use by default.
+
+    By default a real chat completion is attempted first, because a model can
+    be listed by the provider yet still fail (upstream out of credits, revoked
+    auth, an unreachable backend). Saving such a model would only surface the
+    failure later, on the first agent run. Pass ``verify=false`` to skip the
+    check when the upstream is intentionally cold.
+    """
     provider = await db.get(LLMProvider, provider_id)
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
@@ -432,6 +571,26 @@ async def set_default_model(
             status_code=404,
             detail=f"Model '{payload.model_id}' is not registered for this provider. Run a model sync first.",
         )
+
+    if payload.verify:
+        probe = await probe_chat(
+            base_url=provider.base_url,
+            api_key=decrypt_api_key(provider.api_key_encrypted),
+            model_id=payload.model_id,
+            prompt="Reply with the single word: OK",
+            provider_type=provider.provider_type,
+            default_headers=provider.default_headers,
+            max_tokens=16,
+        )
+        if not probe.ok:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Model '{payload.model_id}' did not answer a test completion, "
+                    f"so it was not saved as the default: {probe.error or 'unknown error'}. "
+                    "Pick a model whose upstream has credits/auth, or retry with verify=false."
+                ),
+            )
 
     for row in stored:
         row.is_default = row.model_id == payload.model_id
