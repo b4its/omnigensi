@@ -67,6 +67,7 @@ Copy `.env.example` to `.env`. Notable variables:
 | `AUTH_ENABLED` | `true` | Set `false` to disable the login gate |
 | `AUTH_TOKEN_SECRET` | falls back to `ENCRYPTION_KEY` | Signing secret for session tokens |
 | `AUTH_TOKEN_TTL_SECONDS` | `604800` (7 days) | Session lifetime |
+| `PROVIDER_TLS_VERIFY` | `true` | Verify TLS on outbound provider calls |
 
 ### Using the UI from a phone
 
@@ -112,8 +113,9 @@ policy, file-download security and full end-to-end workflow execution.
 
 - **Single shared password, no users.** `APP_PASSWORD` (default `123`) guards
   the whole instance; there are no per-user accounts, roles or audit trail.
-  Change it before exposing the app, and note the API is only as safe as that
-  password because transport may be plain HTTP on a LAN.
+  Rotate it from **Settings** in the UI (stored as a PBKDF2 hash) or change
+  `APP_PASSWORD` and restart. Note the API is only as safe as that password
+  because transport may be plain HTTP on a LAN.
 - **MCP servers are in-memory.** They are lost on restart.
 - **No file upload endpoint** (download only).
 - **Local disk write requires the File System Access API**, i.e. a Chromium

@@ -57,6 +57,7 @@ services:
       AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-}
       AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:-604800}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      PROVIDER_TLS_VERIFY: ${PROVIDER_TLS_VERIFY:-true}
     volumes:
       - omnigensi_workspace:/app/workspace
       # Live-reload source mount (development only)

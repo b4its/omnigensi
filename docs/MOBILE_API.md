@@ -19,6 +19,8 @@ The whole instance is guarded by **one shared operator password**
 |---|---|
 | `POST /api/v1/auth/login` `{"password": "..."}` | `200` + token, `401` wrong password, `429` throttled |
 | `POST /api/v1/auth/logout` | Clears the session cookie |
+| `POST /api/v1/auth/stream-ticket` | Exchange a session for a 120s URL ticket |
+| `POST /api/v1/auth/change-password` | Rotate the password (session + current password required) |
 | `GET  /api/v1/auth/session` | Reports `{authenticated, auth_enabled}` (public) |
 
 ```json
@@ -76,6 +78,32 @@ standard error envelope:
 ```
 
 `AUTH_ENABLED=false` disables the gate entirely (local experiments only).
+
+### Password rotation
+
+```
+POST /api/v1/auth/change-password
+{ "current_password": "...", "new_password": "..." }
+```
+
+Returns `{authenticated: false}` and clears the cookie. The stored password is
+a PBKDF2 hash that takes precedence over `APP_PASSWORD`, so it survives
+restarts. Rejects a short (<8), unchanged, or default password. Existing
+tokens keep working until they expire, so clients should sign out locally.
+
+### Workspace files
+
+```
+GET    /api/v1/files?q=&limit=&offset=   -> { total, total_bytes, files[] }
+GET    /api/v1/files/{path}              -> the artifact itself
+DELETE /api/v1/files/{path}              -> 204 (400 on traversal)
+POST   /api/v1/files/cleanup?older_than_days=N
+         -> { deleted, freed_bytes, remaining }
+```
+
+Each listing entry carries `filename`, workspace-relative `path`,
+`size_bytes`, `modified_at` and `content_type`. `cleanup` with
+`older_than_days=0` deletes everything, so confirm with the user first.
 
 ### Execution quality flags
 
