@@ -1,6 +1,9 @@
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
+from app.core.database import get_db
+from app.core.mcp_store import delete_server, upsert_server
 from app.engine.mcp_bridge import mcp_manager, MCPServerConfig
 
 router = APIRouter(prefix="/mcp", tags=["Model Context Protocol (MCP)"])
@@ -86,7 +89,9 @@ async def list_mcp_servers():
 
 
 @router.post("/servers", response_model=MCPServerConfig, status_code=status.HTTP_201_CREATED)
-async def register_mcp_server(config: MCPServerConfig):
+async def register_mcp_server(
+    config: MCPServerConfig, db: AsyncSession = Depends(get_db)
+):
     """
     Registers a new Model Context Protocol (MCP) server.
     """
@@ -97,11 +102,17 @@ async def register_mcp_server(config: MCPServerConfig):
         )
     _validate_transport(config)
     mcp_manager.register_server(config)
+    # Persist so the registration survives a restart.
+    await upsert_server(db, config)
     return config
 
 
 @router.put("/servers/{server_name}", response_model=MCPServerConfig)
-async def update_mcp_server(server_name: str, payload: MCPServerUpdateRequest):
+async def update_mcp_server(
+    server_name: str,
+    payload: MCPServerUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Replaces the configuration of an existing MCP server.
 
@@ -113,33 +124,44 @@ async def update_mcp_server(server_name: str, payload: MCPServerUpdateRequest):
         update={k: v for k, v in payload.model_dump(exclude_none=True).items()}
     )
     _validate_transport(merged)
-    return mcp_manager.update_server(server_name, merged)
+    updated = mcp_manager.update_server(server_name, merged)
+    await upsert_server(db, updated)
+    return updated
 
 
 @router.patch("/servers/{server_name}", response_model=MCPServerConfig)
-async def toggle_mcp_server(server_name: str, payload: MCPServerStateRequest):
+async def toggle_mcp_server(
+    server_name: str,
+    payload: MCPServerStateRequest,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Enables or disables an MCP server without removing its configuration.
 
     Disabled servers refuse tool discovery and execution with a 409.
     """
     _require_server(server_name)
-    return mcp_manager.set_enabled(server_name, payload.enabled)
+    updated = mcp_manager.set_enabled(server_name, payload.enabled)
+    await upsert_server(db, updated)
+    return updated
 
 
 @router.delete(
     "/servers/{server_name}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_mcp_server(server_name: str) -> None:
+async def delete_mcp_server(
+    server_name: str, db: AsyncSession = Depends(get_db)
+) -> None:
     """
     Removes an MCP server and its cached tools.
 
-    Note that MCP registrations are held in memory, so this change is lost on
-    backend restart.
+    The deletion is persisted, so a built-in bridge stays removed after a
+    restart instead of being re-registered.
     """
     _require_server(server_name)
     mcp_manager.unregister_server(server_name)
+    await delete_server(db, server_name)
 
 
 @router.get("/servers/{server_name}/tools", response_model=MCPServerToolsResponse)

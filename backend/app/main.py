@@ -11,7 +11,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.auth import is_public_path, token_from_request, verify_token
 from app.core.config import settings
-from app.core.database import engine, init_db
+from app.core.database import AsyncSessionLocal, engine, init_db
+from app.core.mcp_store import load_persisted_servers
 from app.core.errors import install_error_handlers
 from app.core.security import sanitize_workspace_path
 from app.api.v1.providers import router as providers_router
@@ -56,6 +57,13 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing Omnigensi backend...")
     # Ensure database schema exists
     await init_db()
+    # Restore operator-configured MCP servers into the in-memory manager.
+    async with AsyncSessionLocal() as db:
+        try:
+            await load_persisted_servers(db)
+        except Exception as exc:  # noqa: BLE001 - startup must not fail
+            logger.warning("Could not restore MCP registrations: %s", exc)
+
     # Ensure workspace directory exists
     settings.workspace_path.mkdir(parents=True, exist_ok=True)
     logger.info(f"Workspace directory ready at {settings.workspace_path}")
