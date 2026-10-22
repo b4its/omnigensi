@@ -18,7 +18,8 @@ The whole instance is guarded by **one shared operator password**
 | Request | Purpose |
 |---|---|
 | `POST /api/v1/auth/login` `{"password": "..."}` | `200` + token, `401` wrong password, `429` throttled |
-| `POST /api/v1/auth/logout` | Clears the session cookie |
+| `POST /api/v1/auth/logout` | Clears the cookie **and revokes every token** |
+| `POST /api/v1/auth/revoke-sessions` | Same revocation without changing the password |
 | `POST /api/v1/auth/stream-ticket` | Exchange a session for a 120s URL ticket |
 | `POST /api/v1/auth/change-password` | Rotate the password (session + current password required) |
 | `GET  /api/v1/auth/session` | Reports `{authenticated, auth_enabled}` (public) |
@@ -62,6 +63,21 @@ Token precedence is Bearer → query → cookie.
   retrying immediately.
 - `GET /auth/session` is the cheapest way to decide whether to show a login
   prompt at startup.
+
+### Instant revocation
+
+Tokens are signed, but they embed a generation counter checked against the
+server on every request:
+
+- `POST /auth/logout` bumps it, so a token you keep in memory stops working
+  immediately - signing out is real, not just a local delete
+- `POST /auth/revoke-sessions` does the same for **all** clients (lost device)
+- Rotating the password also bumps it
+- Stream tickets carry the generation too, so revoking kills outstanding
+  tickets as well
+
+Always treat any `401` after a successful call as "session ended"; do not
+assume a token remains valid just because it has not expired.
 
 ### What stays public
 
