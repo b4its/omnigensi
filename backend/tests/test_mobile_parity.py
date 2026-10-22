@@ -130,7 +130,15 @@ async def test_health_is_typed_and_versioned():
             resp = await client.get(path)
             assert resp.status_code == 200
             data = resp.json()
-            assert set(data) == {"status", "service", "version", "workspace_root"}
+            assert set(data) == {
+                "status",
+                "service",
+                "version",
+                "workspace_root",
+                # /health now proves readiness by probing its dependencies.
+                "dependencies",
+            }
+            assert data["dependencies"].get("database") is not None
 
 
 @pytest.mark.asyncio

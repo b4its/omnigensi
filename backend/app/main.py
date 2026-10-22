@@ -1,14 +1,17 @@
 import logging
+import uuid
 import mimetypes
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from sqlalchemy import text
+import redis.asyncio as aioredis
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.auth import is_public_path, token_from_request, verify_token
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import engine, init_db
 from app.core.errors import install_error_handlers
 from app.core.security import sanitize_workspace_path
 from app.api.v1.providers import router as providers_router
@@ -85,14 +88,28 @@ async def require_session(request: Request, call_next):
 
     token = token_from_request(request.headers, request.cookies, request.query_params)
     if not verify_token(token):
+        # This middleware sits outside the request-id middleware, so the id is
+        # minted here too: a 401 must be correlatable like every other error.
+        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        logger.warning(
+            "Rejected unauthenticated %s %s from %s (request_id=%s)",
+            request.method,
+            request.url.path,
+            getattr(getattr(request, "client", None), "host", "unknown"),
+            request_id,
+        )
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
             content={
                 "success": False,
                 "detail": "Authentication required",
                 "code": "unauthorized",
+                "request_id": request_id,
             },
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={
+                "WWW-Authenticate": "Bearer",
+                "X-Request-ID": request_id,
+            },
         )
     return await call_next(request)
 
@@ -152,12 +169,42 @@ def guessed_type(name: str) -> str:
 
 @app.get("/health", tags=["Health"], response_model=HealthResponse)
 @app.get(f"{settings.API_V1_STR}/health", tags=["Health"], response_model=HealthResponse)
-async def health_check() -> HealthResponse:
+async def health_check(response: Response) -> HealthResponse:
+    """Liveness *and* readiness: verifies the database and Redis.
+
+    Previously this always answered "healthy", so a monitor stayed green
+    during a full outage of Postgres or Redis.
+    """
+    dependencies: dict[str, str] = {}
+
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        dependencies["database"] = "ok"
+    except Exception as exc:  # noqa: BLE001 - reported to the caller
+        dependencies["database"] = f"error: {type(exc).__name__}"
+
+    try:
+        redis_conn = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        try:
+            await redis_conn.ping()
+            dependencies["redis"] = "ok"
+        finally:
+            await redis_conn.aclose()
+    except Exception as exc:  # noqa: BLE001
+        dependencies["redis"] = f"error: {type(exc).__name__}"
+
+    healthy = all(value == "ok" for value in dependencies.values())
+    if not healthy:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        logger.warning("Health check degraded: %s", dependencies)
+
     return HealthResponse(
-        status="healthy",
+        status="healthy" if healthy else "degraded",
         service="omnigensi-backend",
         version=settings.APP_VERSION,
         workspace_root=str(settings.workspace_path),
+        dependencies=dependencies,
     )
 
 

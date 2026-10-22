@@ -12,12 +12,21 @@ from pydantic import BaseModel, Field
 
 
 class HealthResponse(BaseModel):
-    """Response for ``GET /health`` and ``GET /api/v1/health``."""
+    """Response for ``GET /health`` and ``GET /api/v1/health``.
 
-    status: str = Field(examples=["healthy"])
+    ``status`` is ``healthy`` only when every dependency is reachable;
+    otherwise ``degraded`` (HTTP 503) so orchestrators and uptime monitors
+    notice a real outage.
+    """
+
+    status: str = Field(examples=["healthy", "degraded"])
     service: str = Field(examples=["omnigensi-backend"])
     version: str = Field(examples=["2.0.0"])
     workspace_root: str
+    dependencies: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-dependency reachability, e.g. {'database': 'ok'}",
+    )
 
 
 class ClientConfigResponse(BaseModel):

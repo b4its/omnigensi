@@ -12,6 +12,7 @@ from app.core.auth import (
     verify_token,
 )
 from app.core.config import settings
+from app.core.rate_limit import client_key, login_throttle
 from app.schemas.system import LoginRequest, LoginResponse, SessionInfo
 
 logger = logging.getLogger("omnigensi.auth")
@@ -42,11 +43,14 @@ def _clear_session_cookie(response: Response) -> None:
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(payload: LoginRequest, response: Response) -> Any:
+async def login(payload: LoginRequest, request: Request, response: Response) -> Any:
     """Exchanges the operator password for a session.
 
     Sets an httpOnly cookie for browsers and returns the token in the body so
     a native mobile client can send it as a bearer token.
+
+    Failed attempts are throttled per client address: a short default password
+    must not be brute-forceable.
     """
     if not settings.AUTH_ENABLED:
         return LoginResponse(
@@ -56,12 +60,32 @@ async def login(payload: LoginRequest, response: Response) -> Any:
             expires_at=None,
         )
 
+    key = client_key(request)
+
+    wait = login_throttle.retry_after(key)
+    if wait:
+        logger.warning(
+            "Login attempt from %s rejected: locked out for %ss more", key, wait
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed attempts. Try again in {wait} seconds.",
+            headers={"Retry-After": str(wait)},
+        )
+
     if not password_matches(payload.password):
-        logger.warning("Failed login attempt from %s", getattr(response, "client", "unknown"))
+        lockout = login_throttle.record_failure(key)
+        logger.warning(
+            "Failed login attempt from %s%s",
+            key,
+            f" (locked out for {lockout}s)" if lockout else "",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect password",
         )
+
+    login_throttle.record_success(key)
 
     token, expires_at = issue_token()
     _set_session_cookie(response, token)

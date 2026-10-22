@@ -10,7 +10,7 @@ that reliably, so every failure is normalised to a single envelope::
 
 import logging
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -32,6 +32,7 @@ def _frame(
     status_code: int,
     request: Request,
     errors: Any = None,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> JSONResponse:
     request_id = _request_id(request)
     payload: Dict[str, Any] = {
@@ -42,10 +43,14 @@ def _frame(
     }
     if errors is not None:
         payload["errors"] = errors
+
+    headers: Dict[str, str] = dict(extra_headers or {})
+    if request_id:
+        headers[REQUEST_ID_HEADER] = request_id
     return JSONResponse(
         status_code=status_code,
         content=payload,
-        headers={REQUEST_ID_HEADER: request_id} if request_id else None,
+        headers=headers or None,
     )
 
 
@@ -80,7 +85,16 @@ def install_error_handlers(app: FastAPI) -> None:
             errors = detail
             detail = "Request failed validation"
         code = _STATUS_CODES.get(exc.status_code, "error")
-        return _frame(str(detail), code, exc.status_code, request, errors)
+        # Preserve protocol headers such as Retry-After (throttling) and
+        # WWW-Authenticate (auth challenges); dropping them breaks clients.
+        return _frame(
+            str(detail),
+            code,
+            exc.status_code,
+            request,
+            errors,
+            extra_headers=dict(getattr(exc, "headers", None) or {}),
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):

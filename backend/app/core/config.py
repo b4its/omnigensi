@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     AUTH_COOKIE_NAME: str = "omnigensi_session"
     # Send the cookie only over HTTPS. Enable when serving behind TLS.
     AUTH_COOKIE_SECURE: bool = False
+    # Brute-force protection: after this many failed logins within the window
+    # the caller is locked out with exponential backoff.
+    AUTH_MAX_LOGIN_ATTEMPTS: int = 5
+    AUTH_LOGIN_WINDOW_SECONDS: int = 300
+    AUTH_LOCKOUT_SECONDS: int = 60
 
     @property
     def cors_origins_list(self) -> List[str]:
