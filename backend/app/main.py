@@ -35,6 +35,7 @@ from app.api.v1.tools import router as tools_router
 from app.api.v1.mcp import router as mcp_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.files import router as files_router
+from app.api.v1.chat import router as chat_router
 from app.api.v1.stats import router as stats_router
 
 logging.basicConfig(
@@ -198,6 +199,7 @@ app.include_router(tools_router, prefix=settings.API_V1_STR)
 app.include_router(mcp_router, prefix=settings.API_V1_STR)
 app.include_router(stats_router, prefix=settings.API_V1_STR)
 app.include_router(files_router, prefix=settings.API_V1_STR)
+app.include_router(chat_router, prefix=settings.API_V1_STR)
 
 # Also mount /api/v1/workflows/{id}/execute directly matching PRD table
 app.add_api_route(

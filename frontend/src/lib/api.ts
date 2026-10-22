@@ -223,6 +223,152 @@ export interface ClientConfig {
 	limits: Record<string, number>;
 }
 
+/** One model the chat console can talk to. */
+export interface ChatModelOption {
+	provider_id: string;
+	provider_name: string;
+	model_id: string;
+	display_name?: string | null;
+	context_length?: number | null;
+	is_default: boolean;
+	is_available: boolean;
+}
+
+export interface ChatTurn {
+	role: 'system' | 'user' | 'assistant';
+	content: string;
+}
+
+/** Callbacks for a streaming chat completion. */
+export interface ChatStreamHandlers {
+	onStart?: (info: { provider_id: string; provider_name: string; model_id: string }) => void;
+	onToken?: (text: string) => void;
+	onDone?: (info: { content: string; latency_ms: number }) => void;
+	onError?: (message: string) => void;
+}
+
+/**
+ * Streams a chat completion over SSE.
+ *
+ * POST + SSE is used instead of EventSource (GET-only), so the bearer token
+ * and message history travel in the request body rather than the URL.
+ * Returns an abort controller so a caller can stop an in-flight answer.
+ */
+export function streamChatCompletion(
+	body: {
+		provider_id: string;
+		model_id: string;
+		messages: ChatTurn[];
+		temperature?: number;
+		max_tokens?: number;
+	},
+	handlers: ChatStreamHandlers
+): { abort: () => void; done: Promise<void> } {
+	const controller = new AbortController();
+	const url = buildUrl('/api/v1/chat/completions');
+	const headers: Record<string, string> = {
+		'Content-Type': 'application/json',
+		Accept: 'text/event-stream'
+	};
+	const token = sessionToken();
+	if (token) headers.Authorization = `Bearer ${token}`;
+
+	const done = (async () => {
+		let res: Response;
+		try {
+			res = await fetch(url, {
+				method: 'POST',
+				headers,
+				body: JSON.stringify(body),
+				credentials: 'include',
+				signal: controller.signal
+			});
+		} catch (err) {
+			if (!isAbortError(err)) {
+				handlers.onError?.(err instanceof Error ? err.message : 'Network error');
+			}
+			return;
+		}
+
+		if (!res.ok) {
+			let message = `Request failed with status ${res.status}`;
+			try {
+				const errJson = await res.json();
+				if (errJson.detail) {
+					message = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+				}
+			} catch {
+				/* non-JSON body */
+			}
+			if (res.status === 401) {
+				window.dispatchEvent(new CustomEvent('omnigensi:unauthorized'));
+			}
+			handlers.onError?.(message);
+			return;
+		}
+		if (!res.body) {
+			handlers.onError?.('The browser did not expose a response stream.');
+			return;
+		}
+
+		const reader = res.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = '';
+
+		// SSE frames are separated by a blank line; keep the trailing partial.
+		const flushFrame = (frame: string) => {
+			let event = 'message';
+			const dataLines: string[] = [];
+			for (const line of frame.split('\n')) {
+				if (line.startsWith('event:')) event = line.slice(6).trim();
+				else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+			}
+			if (dataLines.length === 0) return;
+			let data: any;
+			try {
+				data = JSON.parse(dataLines.join('\n'));
+			} catch {
+				return;
+			}
+			switch (event) {
+				case 'start':
+					handlers.onStart?.(data);
+					break;
+				case 'token':
+					handlers.onToken?.(data.text ?? '');
+					break;
+				case 'done':
+					handlers.onDone?.(data);
+					break;
+				case 'error':
+					handlers.onError?.(data.message ?? 'Unknown error');
+					break;
+			}
+		};
+
+		try {
+			for (;;) {
+				const { done: finished, value } = await reader.read();
+				if (finished) break;
+				buffer += decoder.decode(value, { stream: true });
+				let idx: number;
+				while ((idx = buffer.indexOf('\n\n')) !== -1) {
+					const frame = buffer.slice(0, idx);
+					buffer = buffer.slice(idx + 2);
+					flushFrame(frame);
+				}
+			}
+			if (buffer.trim()) flushFrame(buffer);
+		} catch (err) {
+			if (!isAbortError(err)) {
+				handlers.onError?.(err instanceof Error ? err.message : 'Stream interrupted');
+			}
+		}
+	})();
+
+	return { abort: () => controller.abort(), done };
+}
+
 export const api = {
 	// System
 	getClientConfig: () => apiFetch<ClientConfig>('/api/v1/config'),
@@ -297,6 +443,10 @@ export const api = {
 	/** Models already stored for this provider (no live call). */
 	getProviderModelRegistry: (id: string) =>
 		apiFetch<any[]>(`/api/v1/providers/${id}/model-registry`),
+
+	/** Every model the AI chat console can talk to, across active providers. */
+	getChatModels: () =>
+		apiFetch<{ models: ChatModelOption[] }>(`/api/v1/chat/models`),
 
 	/** Choose which stored model the provider should use by default. */
 	setDefaultProviderModel: (id: string, modelId: string, verify = true) =>
