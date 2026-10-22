@@ -458,6 +458,13 @@ export const api = {
 		return `${API_BASE}/api/v1/executions/${id}/stream${suffix}`;
 	},
 
+	/** Invalidates every session token (lost device, forced sign-out). */
+	revokeSessions: () =>
+		apiFetch<{ authenticated: boolean; auth_enabled: boolean }>(
+			'/api/v1/auth/revoke-sessions',
+			{ method: 'POST', retries: 0 }
+		),
+
 	/** Exchanges the current session for a short-lived URL credential. */
 	createStreamTicket: () =>
 		apiFetch<{ ticket: string; expires_at: number }>('/api/v1/auth/stream-ticket', {
@@ -508,6 +515,28 @@ export const api = {
 		),
 
 	// Files
+	listFiles: (page?: { q?: string; limit?: number; offset?: number }) =>
+		apiFetch<{
+			total: number;
+			total_bytes: number;
+			files: {
+				filename: string;
+				path: string;
+				size_bytes: number;
+				modified_at: string;
+				content_type: string;
+			}[];
+		}>('/api/v1/files', { params: page as Record<string, string | number> }),
+	deleteFile: (path: string) =>
+		apiFetch<void>(`/api/v1/files/${path.split('/').map(encodeURIComponent).join('/')}`, {
+			method: 'DELETE'
+		}),
+	cleanupFiles: (olderThanDays: number) =>
+		apiFetch<{ deleted: number; freed_bytes: number; remaining: number }>(
+			`/api/v1/files/cleanup?older_than_days=${olderThanDays}`,
+			{ method: 'POST', timeoutMs: 60_000 }
+		),
+
 	getFileDownloadUrl: (filepath: string, ticket?: string | null) => {
 		const suffix = ticket ? `?token=${encodeURIComponent(ticket)}` : '';
 		return `${API_BASE}/api/v1/files/${filepath.split('/').map(encodeURIComponent).join('/')}${suffix}`;

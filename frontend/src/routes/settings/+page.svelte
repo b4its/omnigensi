@@ -33,6 +33,34 @@
   let loadingInfo = $state(true);
 
   const MIN_LENGTH = 8;
+  let revoking = $state(false);
+
+  /** Invalidates every outstanding token without changing the password. */
+  async function handleRevokeSessions() {
+    const confirmed = await notify.confirm({
+      title: 'SIGN OUT EVERYWHERE',
+      message:
+        'Every active session will be invalidated immediately, including this one. Continue?',
+      confirmLabel: 'REVOKE ALL'
+    });
+    if (!confirmed) return;
+
+    revoking = true;
+    try {
+      await api.revokeSessions();
+      notify.success('All sessions revoked. Sign in again.');
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('omnigensi_session_token');
+      }
+      auth.token = null;
+      auth.authenticated = false;
+      goto('/login', { replaceState: true });
+    } catch (err) {
+      notify.fromError(err, 'Could not revoke sessions');
+    } finally {
+      revoking = false;
+    }
+  }
 
   const canSubmit = $derived(
     !submitting &&
@@ -252,6 +280,27 @@
               </div>
             </div>
           {/if}
+
+          <div class="pt-2 border-t border-[var(--border-color)]/50 space-y-2">
+            <div class="text-[10px] uppercase text-[var(--text-muted)]">Sessions</div>
+            <p class="text-[10px] text-[var(--text-muted)] leading-relaxed">
+              Signing out already revokes tokens on the server. Use this if a device
+              was lost and you want to kill every session at once.
+            </p>
+            <button
+              type="button"
+              onclick={handleRevokeSessions}
+              disabled={revoking}
+              class="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2.5 text-[10px] font-hud font-bold border border-[var(--status-danger)]/50 text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 chamfer-sm disabled:opacity-40"
+            >
+              {#if revoking}
+                <Loader2 class="w-3.5 h-3.5 animate-spin" />
+                <span>REVOKING...</span>
+              {:else}
+                <span>SIGN OUT EVERYWHERE</span>
+              {/if}
+            </button>
+          </div>
 
           <div class="flex items-center gap-1.5 pt-2 border-t border-[var(--border-color)]/50 text-[10px] text-[var(--text-muted)]">
             <Server class="w-3.5 h-3.5" />
