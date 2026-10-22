@@ -168,10 +168,15 @@ async def test_stream_ticket_grants_access_but_session_token_does_not():
         exec_id = created.json()["id"]
         await client.post(f"/api/v1/executions/{exec_id}/cancel")
 
+    # Mint both credentials for the server's current generation: tokens from an
+    # older generation are rejected by the revocation check, which would make
+    # this test assert the wrong thing.
     from app.core.auth import issue_stream_ticket
+    from tests.conftest import auth_token, current_version_via_login
 
-    session_token, _ = issue_token()
-    ticket, _ = issue_stream_ticket()
+    session_token = auth_token()
+    version = await current_version_via_login()
+    ticket, _ = issue_stream_ticket(token_version=version)
 
     async with _anon_client() as client:
         anonymous = await client.get(f"/api/v1/executions/{exec_id}/stream")
