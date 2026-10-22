@@ -11,9 +11,16 @@
   let submitting = $state(false);
   let localError = $state<string | null>(null);
 
-  const redirectTo = $derived(
-    page.url.searchParams.get('redirect') || '/'
-  );
+  /**
+   * Only same-origin relative paths are allowed. Without this check
+   * `/login?redirect=//evil.com` would bounce the user off-site right after a
+   * successful authentication.
+   */
+  const redirectTo = $derived.by(() => {
+    const raw = page.url.searchParams.get('redirect') || '/';
+    const isRelative = raw.startsWith('/') && !raw.startsWith('//') && !raw.startsWith('/\\');
+    return isRelative ? raw : '/';
+  });
 
   let passwordInput: HTMLInputElement | undefined = $state();
 

@@ -2,11 +2,13 @@
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/state';
   import { marked } from 'marked';
+  import { sanitizeHtml } from '$lib/utils/sanitize';
   import { api } from '$lib/api';
   import { notify } from '$lib/stores/notify.svelte';
   import { deviceBridge } from '$lib/stores/deviceBridge.svelte';
   import CyberCard from '$lib/components/ui/CyberCard.svelte';
   import CyberButton from '$lib/components/ui/CyberButton.svelte';
+  import LoadError from '$lib/components/ui/LoadError.svelte';
   import TerminalLog, { type TerminalEntry } from '$lib/components/ui/TerminalLog.svelte';
   import {
     Play,
@@ -48,6 +50,8 @@
   );
 
   let isExecuting = $state<boolean>(false);
+  let loadError = $state<string | null>(null);
+  let loadingPage = $state(true);
   let isCancelling = $state<boolean>(false);
   let activeExecutionId = $state<string | null>(null);
   let activeNodeId = $state<string | null>(null);
@@ -82,6 +86,8 @@
   }
 
   // Human-in-the-Loop Device Approval
+  let approvalSubmitting = $state(false);
+  let approvalError = $state<string | null>(null);
   let pendingApproval = $state<{
     execution_id: string;
     node_id: string;
@@ -94,6 +100,7 @@
   let eventSource: EventSource | null = null;
 
   onMount(async () => {
+    window.addEventListener('keydown', handleGlobalKeydown);
     try {
       const [wfs, ags] = await Promise.all([
         api.getWorkflows(),
@@ -114,11 +121,21 @@
         attachToExecution(queryExec);
       }
     } catch (e) {
-      console.error(e);
+      loadError = e instanceof Error ? e.message : 'Unable to reach the backend';
+    } finally {
+      loadingPage = false;
     }
   });
 
+  /** Escape from the HITL gate means "reject" - never silently approve. */
+  function handleGlobalKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape' && pendingApproval && !approvalSubmitting) {
+      handleApproval(false);
+    }
+  }
+
   onDestroy(() => {
+    window.removeEventListener('keydown', handleGlobalKeydown);
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (eventSource) {
       eventSource.close();
@@ -418,6 +435,8 @@
   async function handleApproval(approved: boolean) {
     if (!pendingApproval || !activeExecutionId) return;
     const approvalData = pendingApproval;
+    approvalSubmitting = true;
+    approvalError = null;
     try {
       await api.approveTool(activeExecutionId, approvalData.tool_call_id, approved);
       terminalLogs = [
@@ -428,10 +447,20 @@
           timestamp: new Date().toLocaleTimeString(),
         },
       ];
-    } catch (e: any) {
-      console.error('Failed to submit approval:', e);
-    } finally {
+      // Only close the gate once the decision actually reached the backend.
+      // Closing on failure would silently leave the run blocked forever.
       pendingApproval = null;
+    } catch (e) {
+      approvalError =
+        e instanceof Error ? e.message : 'Could not reach the backend';
+      notify.error(`Approval not sent: ${approvalError}`);
+      pushLog({
+        type: 'error',
+        message: `[APPROVAL FAILED]: ${approvalError}. The run is still waiting.`,
+        timestamp: new Date().toLocaleTimeString(),
+      });
+    } finally {
+      approvalSubmitting = false;
     }
   }
 
@@ -552,7 +581,10 @@
     }
   }
 
-  const renderedHtml = $derived(marked.parse(finalMarkdown || streamBuffer || ''));
+  // Agent output is untrusted: always sanitise before {@html} injection.
+  const renderedHtml = $derived(
+    sanitizeHtml(marked.parse(finalMarkdown || streamBuffer || '') as string)
+  );
 </script>
 
 <div class="space-y-6">
@@ -580,6 +612,14 @@
       </div>
     </div>
   </div>
+
+  {#if loadError}
+    <LoadError
+      message={`${loadError} — workflows could not be loaded.`}
+      onRetry={() => location.reload()}
+      retrying={loadingPage}
+    />
+  {/if}
 
   <!-- Stream health banner: reconnecting / lost -->
   {#if streamError || reconnecting}
@@ -822,7 +862,7 @@
           >
             <span>HARDWARE FILES</span>
             {#if generatedFiles.length > 0}
-              <span class="w-4 h-4 rounded-full bg-[var(--accent-primary)] text-black text-[9px] font-bold flex items-center justify-center">
+              <span class="w-4 h-4 rounded-full bg-[var(--accent-primary)] text-[var(--on-accent)] text-[9px] font-bold flex items-center justify-center">
                 {generatedFiles.length}
               </span>
             {/if}
@@ -909,20 +949,26 @@
   <!-- Human In The Loop (HITL) Authorization Modal -->
   {#if pendingApproval}
     <div class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div class="bg-[var(--bg-surface)] border-2 border-[var(--accent-warning, #f59e0b)] p-4 sm:p-6 max-w-lg w-full relative cyber-chamfer-lg shadow-2xl space-y-4 max-h-[92dvh] overflow-y-auto rounded-t-lg sm:rounded-none">
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="hitl-title"
+        aria-describedby="hitl-desc"
+        class="bg-[var(--bg-surface)] border-2 border-[var(--accent-warning)] p-4 sm:p-6 max-w-lg w-full relative chamfer-lg shadow-2xl space-y-4 max-h-[92dvh] overflow-y-auto rounded-t-lg sm:rounded-none"
+      >
         <div class="flex items-center gap-3 border-b border-[var(--border-color)] pb-3">
-          <ShieldAlert class="w-7 h-7 text-[var(--accent-warning, #f59e0b)] animate-pulse" />
+          <ShieldAlert class="w-7 h-7 text-[var(--accent-warning)] animate-pulse" />
           <div>
-            <div class="text-[10px] font-code text-[var(--accent-warning, #f59e0b)] uppercase tracking-wider font-bold">
+            <div class="text-[10px] font-code text-[var(--accent-warning)] uppercase tracking-wider font-bold">
               HITL SECURITY GATE // ACTION REQUIRED
             </div>
-            <h3 class="text-lg font-hud font-bold text-[var(--text-primary)]">
+            <h3 id="hitl-title" class="text-lg font-hud font-bold text-[var(--text-primary)]">
               AUTHORIZE HARDWARE ACCESS
             </h3>
           </div>
         </div>
 
-        <div class="text-xs font-code space-y-2 text-[var(--text-secondary)]">
+        <div id="hitl-desc" class="text-xs font-code space-y-2 text-[var(--text-secondary)]">
           <p>
             Agent <span class="text-[var(--accent-primary)] font-bold">{pendingApproval.agent_name}</span> is requesting permission to execute tool:
           </p>
@@ -937,12 +983,32 @@
           </p>
         </div>
 
+        {#if approvalError}
+          <div
+            class="flex items-start gap-2 border border-[var(--status-danger)]/60 bg-[var(--status-danger)]/10 px-2.5 py-2 text-[11px] font-code text-[var(--status-danger)]"
+            role="alert"
+          >
+            <AlertTriangle class="w-4 h-4 shrink-0 mt-0.5" />
+            <span class="break-words">
+              {approvalError} — the run is still waiting for a decision. Retry below.
+            </span>
+          </div>
+        {/if}
+
         <div class="flex items-center justify-end gap-3 pt-3 border-t border-[var(--border-color)]">
-          <CyberButton variant="danger" onclick={() => handleApproval(false)}>
+          <CyberButton
+            variant="danger"
+            disabled={approvalSubmitting}
+            onclick={() => handleApproval(false)}
+          >
             [REJECT & ABORT]
           </CyberButton>
-          <CyberButton variant="primary" onclick={() => handleApproval(true)}>
-            [AUTHORIZE WRITE]
+          <CyberButton
+            variant="primary"
+            disabled={approvalSubmitting}
+            onclick={() => handleApproval(true)}
+          >
+            {approvalSubmitting ? '[SENDING...]' : '[AUTHORIZE WRITE]'}
           </CyberButton>
         </div>
       </div>
