@@ -5,6 +5,7 @@
   import CyberCard from '$lib/components/ui/CyberCard.svelte';
   import CyberButton from '$lib/components/ui/CyberButton.svelte';
   import ProviderModelPanel from '$lib/components/providers/ProviderModelPanel.svelte';
+  import LoadError from '$lib/components/ui/LoadError.svelte';
   import {
     Server,
     Plus,
@@ -29,6 +30,7 @@
   let providers = $state<any[]>([]);
   let mcpServers = $state<any[]>([]);
   let loading = $state<boolean>(true);
+  let loadError = $state<string | null>(null);
   let showCreateModal = $state<boolean>(false);
   let editingProviderId = $state<string | null>(null);
   let syncLoading = $state<Record<string, boolean>>({});
@@ -74,14 +76,17 @@
   async function loadProviders() {
     try {
       loading = true;
+      loadError = null;
       const [pr, mcp] = await Promise.all([
         api.getProviders(),
         api.getMCPServers().catch(() => []),
       ]);
       providers = pr;
       mcpServers = mcp;
-    } catch (e: any) {
-      console.error(e);
+    } catch (e) {
+      // Surfacing the failure matters: otherwise an outage looks exactly like
+      // an empty vault and invites the user to re-register everything.
+      loadError = e instanceof Error ? e.message : 'Unable to reach the backend';
     } finally {
       loading = false;
     }
@@ -419,7 +424,9 @@
   </div>
 
   <!-- Provider List -->
-  {#if loading}
+  {#if loadError}
+    <LoadError message={loadError} onRetry={loadProviders} retrying={loading} />
+  {:else if loading}
     <div class="text-center py-12 font-code text-xs text-[var(--text-muted)] animate-pulse">
       SCANNING LLM GATEWAY VAULTS...
     </div>

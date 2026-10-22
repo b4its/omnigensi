@@ -24,13 +24,13 @@
     RefreshCw,
   } from 'lucide-svelte';
 
-  let providers = $state<any[]>([]);
   let agents = $state<any[]>([]);
   let workflows = $state<any[]>([]);
   let executions = $state<any[]>([]);
   let loading = $state<boolean>(true);
   let loadError = $state<string | null>(null);
   let stats = $state<SystemStats | null>(null);
+  let quickWorkflowId = $state<string>('');
   let quickTask = $state<string>('Design a high-availability banking gateway architecture with real-time fraud detection');
   let launching = $state<boolean>(false);
 
@@ -48,15 +48,17 @@
       const [statsRes, agentsRes, workflowsRes, executionsRes] = await Promise.all([
         api.getStats(),
         api.getAgents({ limit: 8 }),
-        api.getWorkflows({ limit: 50 }),
+        // Only the picker needs these, so fetch a small page.
+        api.getWorkflows({ limit: 20 }),
         api.getExecutions({ limit: 5 }),
       ]);
       stats = statsRes;
       agents = agentsRes;
       workflows = workflowsRes;
       executions = executionsRes;
-      // Keep the quick-launch picker usable without a second request.
-      providers = [];
+      if (!quickWorkflowId && workflows.length > 0) {
+        quickWorkflowId = workflows[0].id;
+      }
     } catch (err) {
       stats = null;
       loadError = err instanceof Error ? err.message : 'Unable to reach the backend';
@@ -69,9 +71,9 @@
 
   async function handleQuickLaunch() {
     if (!quickTask.trim()) return;
-    const targetWorkflow = workflows[0];
+    const targetWorkflow = workflows.find((w) => w.id === quickWorkflowId);
     if (!targetWorkflow) {
-      notify.warning("No workflow found. Assemble a workflow in Graph Builder first.");
+      notify.warning('Select a workflow first, or build one in Graph Builder.');
       return;
     }
 
@@ -109,23 +111,43 @@
       </p>
 
       <!-- Quick Launch Bar -->
-      <div class="pt-2 flex flex-col sm:flex-row gap-2">
-        <div class="relative flex-1">
-          <input
-            type="text"
-            bind:value={quickTask}
-            placeholder="Enter mission objective..."
-            class="w-full px-3.5 py-2.5 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-xs font-code text-[var(--text-primary)] rounded-none focus:outline-none focus:border-[var(--accent-primary)]"
-          />
+      <div class="pt-2 space-y-2">
+        <label class="block font-code text-xs">
+          <span class="block text-[10px] uppercase text-[var(--text-muted)] mb-1">
+            Pipeline to run
+          </span>
+          <select
+            bind:value={quickWorkflowId}
+            disabled={launching || workflows.length === 0}
+            class="w-full px-3 py-2.5 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)] disabled:opacity-50"
+          >
+            {#if workflows.length === 0}
+              <option value="">No workflows available</option>
+            {/if}
+            {#each workflows as wf}
+              <option value={wf.id}>{wf.name}</option>
+            {/each}
+          </select>
+        </label>
+
+        <div class="flex flex-col sm:flex-row gap-2">
+          <div class="relative flex-1">
+            <input
+              type="text"
+              bind:value={quickTask}
+              placeholder="Enter mission objective..."
+              class="w-full px-3.5 py-2.5 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-xs font-code text-[var(--text-primary)] rounded-none focus:outline-none focus:border-[var(--accent-primary)]"
+            />
+          </div>
+          <CyberButton
+            variant="primary"
+            disabled={launching || !quickWorkflowId}
+            onclick={handleQuickLaunch}
+          >
+            <Play class="w-4 h-4 fill-current" />
+            <span>{launching ? 'INITIALIZING...' : 'QUICK LAUNCH'}</span>
+          </CyberButton>
         </div>
-        <CyberButton
-          variant="primary"
-          disabled={launching || workflows.length === 0}
-          onclick={handleQuickLaunch}
-        >
-          <Play class="w-4 h-4 fill-current" />
-          <span>{launching ? 'INITIALIZING...' : 'QUICK LAUNCH'}</span>
-        </CyberButton>
       </div>
     </div>
   </div>

@@ -4,6 +4,7 @@
   import { notify } from '$lib/stores/notify.svelte';
   import CyberCard from '$lib/components/ui/CyberCard.svelte';
   import CyberButton from '$lib/components/ui/CyberButton.svelte';
+  import LoadError from '$lib/components/ui/LoadError.svelte';
   import {
     Bot,
     Plus,
@@ -27,6 +28,7 @@
   let providers = $state<any[]>([]);
   let availableTools = $state<any[]>([]);
   let loading = $state<boolean>(true);
+  let loadError = $state<string | null>(null);
 
   // Modal / Drawer state
   let showModal = $state<boolean>(false);
@@ -68,6 +70,7 @@
   async function loadData() {
     try {
       loading = true;
+      loadError = null;
       const [ag, pr, tl] = await Promise.all([
         api.getAgents(),
         api.getProviders(),
@@ -79,8 +82,8 @@
       if (providers.length > 0 && !formProviderId) {
         formProviderId = providers[0].id;
       }
-    } catch (err: any) {
-      console.error("Failed to load studio data:", err);
+    } catch (err) {
+      loadError = err instanceof Error ? err.message : 'Unable to reach the backend';
     } finally {
       loading = false;
     }
@@ -258,7 +261,9 @@
   </div>
 
   <!-- Agent Cards Grid -->
-  {#if loading}
+  {#if loadError}
+    <LoadError message={loadError} onRetry={loadData} retrying={loading} />
+  {:else if loading}
     <div class="text-center py-12 font-code text-xs text-[var(--text-muted)] animate-pulse">
       INDEXING AGENT DIRECTORY...
     </div>
@@ -591,7 +596,7 @@
                   onclick={() => toggleTool(tool.id)}
                   class="flex items-start gap-2 p-2 border rounded-sm text-left transition-colors cursor-pointer {isChecked ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)]/10 text-[var(--text-primary)]' : 'border-[var(--border-color)]/60 bg-[var(--bg-surface)] text-[var(--text-muted)]'}"
                 >
-                  <div class="w-4 h-4 rounded border flex items-center justify-center mt-0.5 {isChecked ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)] text-black' : 'border-[var(--text-muted)]'}">
+                  <div class="w-4 h-4 rounded border flex items-center justify-center mt-0.5 {isChecked ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)] text-[var(--on-accent)]' : 'border-[var(--text-muted)]'}">
                     {#if isChecked}<Check class="w-3 h-3 stroke-[3]" />{/if}
                   </div>
                   <div>

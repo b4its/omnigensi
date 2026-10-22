@@ -5,6 +5,7 @@
   import { notify } from '$lib/stores/notify.svelte';
   import CyberCard from '$lib/components/ui/CyberCard.svelte';
   import CyberButton from '$lib/components/ui/CyberButton.svelte';
+  import LoadError from '$lib/components/ui/LoadError.svelte';
   import AgentNode from '$lib/components/workflow/AgentNode.svelte';
   import { SvelteFlow, Controls, Background, BackgroundVariant } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
@@ -28,6 +29,7 @@
   let workflows = $state<any[]>([]);
   let agents = $state<any[]>([]);
   let loading = $state<boolean>(true);
+  let loadError = $state<string | null>(null);
 
   // View Mode: 'canvas' (Xyflow interactive graph) vs 'list' (sequential configuration)
   let viewMode = $state<'canvas' | 'list'>('canvas');
@@ -50,6 +52,7 @@
   async function loadData() {
     try {
       loading = true;
+      loadError = null;
       const [w, a] = await Promise.all([
         api.getWorkflows(),
         api.getAgents(),
@@ -61,8 +64,8 @@
       } else if (workflows.length === 0) {
         initNewPipeline();
       }
-    } catch (err: any) {
-      console.error(err);
+    } catch (err) {
+      loadError = err instanceof Error ? err.message : 'Unable to reach the backend';
     } finally {
       loading = false;
     }
@@ -368,6 +371,10 @@
     </div>
   </div>
 
+  {#if loadError}
+    <LoadError message={loadError} onRetry={loadData} retrying={loading} />
+  {/if}
+
   <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
     <!-- Saved Workflows Sidebar -->
     <div class="lg:col-span-1 space-y-3">
@@ -441,7 +448,7 @@
                   <button
                     type="button"
                     onclick={() => viewMode = 'canvas'}
-                    class="px-2 py-1 flex items-center gap-1 font-hud transition-colors {viewMode === 'canvas' ? 'bg-[var(--accent-primary)] text-black font-bold' : 'bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+                    class="px-2 py-1 flex items-center gap-1 font-hud transition-colors {viewMode === 'canvas' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] font-bold' : 'bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
                   >
                     <LayoutGrid class="w-3 h-3" />
                     XYFLOW CANVAS
@@ -449,7 +456,7 @@
                   <button
                     type="button"
                     onclick={() => viewMode = 'list'}
-                    class="px-2 py-1 flex items-center gap-1 font-hud transition-colors {viewMode === 'list' ? 'bg-[var(--accent-primary)] text-black font-bold' : 'bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+                    class="px-2 py-1 flex items-center gap-1 font-hud transition-colors {viewMode === 'list' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] font-bold' : 'bg-[var(--bg-surface)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
                   >
                     <ListFilter class="w-3 h-3" />
                     STEP SEQUENCE
@@ -487,7 +494,7 @@
                   <div class="relative border p-3 chamfer-sm transition-all {isReviewer ? 'border-[var(--status-warning)]/60 bg-[var(--status-warning)]/5' : 'border-[var(--border-color)] bg-[var(--bg-elevated)]/40'}">
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                       <div class="flex items-center gap-2">
-                        <span class="w-6 h-6 rounded-full bg-[var(--accent-primary)] text-black font-hud font-bold text-xs flex items-center justify-center">
+                        <span class="w-6 h-6 rounded-full bg-[var(--accent-primary)] text-[var(--on-accent)] font-hud font-bold text-xs flex items-center justify-center">
                           {idx + 1}
                         </span>
                         <span class="font-hud font-bold text-xs text-[var(--text-primary)]">

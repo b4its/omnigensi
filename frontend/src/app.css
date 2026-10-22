@@ -10,6 +10,7 @@
   --accent-secondary: #0066FF;
   --status-success: #00FF9D;
   --status-warning: #FFB800;
+  --accent-warning: #FFB800;
   --status-danger: #FF0055;
   --border-color: rgba(0, 240, 255, 0.25);
   --border-glow: 0 0 12px rgba(0, 240, 255, 0.35);
@@ -29,6 +30,7 @@
   --accent-secondary: #0088B8;
   --status-success: #008A5E;
   --status-warning: #D97706;
+  --accent-warning: #B45309;
   --status-danger: #DC2626;
   --border-color: rgba(0, 72, 229, 0.3);
   --border-glow: 4px 4px 0px #0048E5;
