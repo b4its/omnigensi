@@ -28,6 +28,7 @@ from app.api.v1.executions import router as executions_router, trigger_workflow_
 from app.api.v1.tools import router as tools_router
 from app.api.v1.mcp import router as mcp_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.files import router as files_router
 from app.api.v1.stats import router as stats_router
 
 logging.basicConfig(
@@ -169,6 +170,7 @@ app.include_router(executions_router, prefix=settings.API_V1_STR)
 app.include_router(tools_router, prefix=settings.API_V1_STR)
 app.include_router(mcp_router, prefix=settings.API_V1_STR)
 app.include_router(stats_router, prefix=settings.API_V1_STR)
+app.include_router(files_router, prefix=settings.API_V1_STR)
 
 # Also mount /api/v1/workflows/{id}/execute directly matching PRD table
 app.add_api_route(
@@ -269,6 +271,8 @@ async def client_config(request: Request) -> ClientConfigResponse:
             "mcp_servers": True,
             "file_download": True,
             "file_upload": False,
+            "file_listing": True,
+            "file_cleanup": True,
             "stats": True,
             "provider_test": True,
             "execution_filters": True,
@@ -293,21 +297,6 @@ async def client_config(request: Request) -> ClientConfigResponse:
     )
 
 
-@app.get(f"{settings.API_V1_STR}/files/{{filename:path}}", tags=["Files"])
-async def download_workspace_file(filename: str):
-    """
-    Download endpoint for agent-generated artifacts.
-
-    Used by mobile clients (and browsers without File System Access API) to
-    fetch files by the ``filepath``/``filename`` reported in
-    ``generated_files`` or in a ``device_file_write`` stream event. Both
-    workspace-relative ("report.md") and tool-emitted absolute
-    ("/app/workspace/report.md") paths are accepted.
-    """
-    try:
-        file_path = sanitize_workspace_path(filename)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
