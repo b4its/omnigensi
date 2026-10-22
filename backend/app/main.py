@@ -86,8 +86,19 @@ async def require_session(request: Request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    token = token_from_request(request.headers, request.cookies, request.query_params)
-    if not verify_token(token):
+    token = token_from_request(
+        request.headers, request.cookies, request.query_params, allow_query=False
+    )
+    authenticated = verify_token(token)
+
+    # URL-based access (EventSource, <a download>) may only use a short-lived
+    # stream ticket, never the long-lived session token.
+    if not authenticated and request.query_params.get("token"):
+        authenticated = verify_token(
+            request.query_params.get("token"), required_scope="stream"
+        )
+
+    if not authenticated:
         # This middleware sits outside the request-id middleware, so the id is
         # minted here too: a 401 must be correlatable like every other error.
         request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex

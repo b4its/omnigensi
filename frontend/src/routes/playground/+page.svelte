@@ -201,7 +201,7 @@
   }
 
   /** Opens (or re-opens) the SSE stream, resuming from the last seen event id. */
-  function connectStream(execId: string) {
+  async function connectStream(execId: string) {
     if (eventSource) {
       eventSource.close();
       eventSource = null;
@@ -211,7 +211,23 @@
       reconnectTimer = null;
     }
 
-    const streamUrl = api.getExecutionStreamUrl(execId);
+    // A fresh, short-lived ticket per connection: the session token itself is
+    // never placed in a URL.
+    let ticket: string | null = null;
+    try {
+      const issued = await api.createStreamTicket();
+      ticket = issued.ticket;
+    } catch (err) {
+      streamError = err instanceof Error ? err.message : 'Could not authorise the stream';
+      isExecuting = false;
+      notify.fromError(err, 'Could not authorise the telemetry stream');
+      return;
+    }
+
+    // The user may have navigated away while the ticket was in flight.
+    if (activeExecutionId !== execId) return;
+
+    const streamUrl = api.getExecutionStreamUrl(execId, ticket);
     eventSource = new EventSource(streamUrl);
 
     // Track the SSE cursor so a reconnect can ask for replay.

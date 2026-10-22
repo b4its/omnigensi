@@ -1,4 +1,5 @@
 import { notify } from './notify.svelte';
+import { api } from '$lib/api';
 
 const browser = typeof window !== 'undefined';
 
@@ -69,8 +70,18 @@ class DeviceBridgeStore {
     if (!base64Data) {
       const path = fallbackPath || filename;
       try {
+        // The download URL is authenticated: fetch a short-lived ticket first
+        // instead of embedding the long-lived session token in the URL.
+        let ticket: string | null = null;
+        try {
+          const issued = await api.createStreamTicket();
+          ticket = issued.ticket;
+        } catch {
+          /* AUTH_ENABLED=false deployments need no credential. */
+        }
+
         const a = document.createElement('a');
-        a.href = `/api/v1/files/${path.split('/').map(encodeURIComponent).join('/')}`;
+        a.href = api.getFileDownloadUrl(path, ticket);
         a.download = filename;
         a.rel = 'noopener';
         document.body.appendChild(a);

@@ -159,3 +159,15 @@ class LoginResponse(SessionInfo):
     """
 
     token: Optional[str] = None
+
+
+class StreamTicketResponse(BaseModel):
+    """Short-lived credential for URL-based access.
+
+    Used for the SSE stream and file downloads, where the platform cannot set
+    an Authorization header. Never store or log it; request a fresh one.
+    """
+
+    ticket: str
+    expires_at: int
+

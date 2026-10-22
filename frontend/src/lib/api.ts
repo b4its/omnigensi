@@ -434,12 +434,24 @@ export const api = {
 			params: page as Record<string, string | number>
 		}),
 	getExecution: (id: string) => apiFetch<any>(`/api/v1/executions/${id}`),
-	getExecutionStreamUrl: (id: string) => {
-		// EventSource cannot set headers, so the token travels in the query.
-		const token = sessionToken();
-		const suffix = token ? `?token=${encodeURIComponent(token)}` : '';
+	/**
+	 * URL used by EventSource, which cannot set headers.
+	 *
+	 * A short-lived stream ticket replaces the session token so the long-lived
+	 * credential never appears in URLs, access logs or Referer headers. Call
+	 * `api.createStreamTicket()` first and pass the ticket here.
+	 */
+	getExecutionStreamUrl: (id: string, ticket?: string | null) => {
+		const suffix = ticket ? `?token=${encodeURIComponent(ticket)}` : '';
 		return `${API_BASE}/api/v1/executions/${id}/stream${suffix}`;
 	},
+
+	/** Exchanges the current session for a short-lived URL credential. */
+	createStreamTicket: () =>
+		apiFetch<{ ticket: string; expires_at: number }>('/api/v1/auth/stream-ticket', {
+			method: 'POST',
+			retries: 0
+		}),
 	approveTool: (id: string, toolCallId: string, approved: boolean, notes?: string) =>
 		apiFetch<any>(`/api/v1/executions/${id}/approve-tool`, {
 			method: 'POST',
@@ -484,9 +496,8 @@ export const api = {
 		),
 
 	// Files
-	getFileDownloadUrl: (filepath: string) => {
-		const token = sessionToken();
-		const suffix = token ? `?token=${encodeURIComponent(token)}` : '';
+	getFileDownloadUrl: (filepath: string, ticket?: string | null) => {
+		const suffix = ticket ? `?token=${encodeURIComponent(ticket)}` : '';
 		return `${API_BASE}/api/v1/files/${filepath.split('/').map(encodeURIComponent).join('/')}${suffix}`;
 	},
 

@@ -6,6 +6,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from app.core.auth import (
+    issue_stream_ticket,
     issue_token,
     password_matches,
     token_from_request,
@@ -13,7 +14,12 @@ from app.core.auth import (
 )
 from app.core.config import settings
 from app.core.rate_limit import client_key, login_throttle
-from app.schemas.system import LoginRequest, LoginResponse, SessionInfo
+from app.schemas.system import (
+    LoginRequest,
+    LoginResponse,
+    SessionInfo,
+    StreamTicketResponse,
+)
 
 logger = logging.getLogger("omnigensi.auth")
 
@@ -127,3 +133,28 @@ async def session(request: Request) -> Any:
         authenticated=authenticated,
         auth_enabled=settings.AUTH_ENABLED,
     )
+
+
+@router.post("/stream-ticket", response_model=StreamTicketResponse)
+async def create_stream_ticket(request: Request) -> Any:
+    """Exchanges a valid session for a short-lived, stream-scoped ticket.
+
+    The ticket is the only credential accepted in a URL, so the long-lived
+    session token never appears in access logs or Referer headers.
+    """
+    if not settings.AUTH_ENABLED:
+        # Nothing to exchange; the caller needs no credential at all.
+        ticket, expires_at = issue_stream_ticket()
+        return StreamTicketResponse(ticket=ticket, expires_at=expires_at)
+
+    token = token_from_request(
+        request.headers, request.cookies, request.query_params, allow_query=False
+    )
+    if not verify_token(token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A valid session is required to obtain a stream ticket",
+        )
+
+    ticket, expires_at = issue_stream_ticket()
+    return StreamTicketResponse(ticket=ticket, expires_at=expires_at)

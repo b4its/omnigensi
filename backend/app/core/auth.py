@@ -22,7 +22,7 @@ import json
 import logging
 import secrets
 import time
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from app.core.config import settings
 
@@ -55,6 +55,15 @@ def _b64decode(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + padding)
 
 
+def _sign_payload(payload: Dict[str, object]) -> Tuple[str, int]:
+    """Signs a JSON payload and returns (token, expiry)."""
+    encoded = _b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signature = _b64encode(
+        hmac.new(_secret(), encoded.encode("ascii"), hashlib.sha256).digest()
+    )
+    return f"{encoded}.{signature}", int(payload["exp"])  # type: ignore[arg-type]
+
+
 def issue_token(ttl_seconds: Optional[int] = None) -> Tuple[str, int]:
     """Creates a signed session token.
 
@@ -63,14 +72,28 @@ def issue_token(ttl_seconds: Optional[int] = None) -> Tuple[str, int]:
     ttl = settings.AUTH_TOKEN_TTL_SECONDS if ttl_seconds is None else ttl_seconds
     now = int(time.time())
     expires_at = now + ttl
-    payload = {"iat": now, "exp": expires_at, "nonce": secrets.token_hex(8)}
-    encoded = _b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
-    signature = _b64encode(hmac.new(_secret(), encoded.encode("ascii"), hashlib.sha256).digest())
-    return f"{encoded}.{signature}", expires_at
+    payload = {"iat": now, "exp": expires_at, "scope": "session", "nonce": secrets.token_hex(8)}
+    return _sign_payload(payload)
 
 
-def verify_token(token: Optional[str]) -> bool:
-    """Validates signature and expiry. Never raises."""
+def issue_stream_ticket(ttl_seconds: int = 120) -> Tuple[str, int]:
+    """Creates a short-lived ticket for URL-based auth.
+
+    ``EventSource`` and ``<a download>`` cannot set headers, so the credential
+    has to travel in the query string. Sending the 7-day session token there
+    would leak it into access logs, proxy logs and Referer headers, so clients
+    exchange it for a ticket that expires in minutes and is scoped by a marker
+    inside the signed payload.
+    """
+    ttl = max(30, min(ttl_seconds, 900))
+    now = int(time.time())
+    expires_at = now + ttl
+    payload = {"iat": now, "exp": expires_at, "scope": "stream", "nonce": secrets.token_hex(8)}
+    return _sign_payload(payload)
+
+
+def verify_token(token: Optional[str], required_scope: Optional[str] = None) -> bool:
+    """Validates signature, expiry and scope. Never raises."""
     if not token or "." not in token:
         return False
     encoded, _, signature = token.partition(".")
@@ -84,7 +107,7 @@ def verify_token(token: Optional[str]) -> bool:
         return False
 
     try:
-        payload: Dict[str, int] = json.loads(_b64decode(encoded))
+        payload: Dict[str, Any] = json.loads(_b64decode(encoded))
     except (ValueError, json.JSONDecodeError):
         return False
 
@@ -93,7 +116,17 @@ def verify_token(token: Optional[str]) -> bool:
     except (TypeError, ValueError):
         return False
 
-    return expires_at > int(time.time())
+    if expires_at <= int(time.time()):
+        return False
+
+    # A stream ticket must not be usable as a full session, and vice versa.
+    scope = payload.get("scope") or "session"
+    if required_scope is not None and scope != required_scope:
+        return False
+    if required_scope is None and scope != "session":
+        return False
+
+    return True
 
 
 def password_matches(candidate: Optional[str]) -> bool:
@@ -103,7 +136,7 @@ def password_matches(candidate: Optional[str]) -> bool:
     return hmac.compare_digest(candidate, settings.APP_PASSWORD)
 
 
-def token_from_request(headers, cookies, query_params) -> Optional[str]:
+def token_from_request(headers, cookies, query_params, allow_query: bool = True) -> Optional[str]:
     """Extracts a session token from a request.
 
     Order: ``Authorization: Bearer`` (mobile) -> query string (EventSource) ->
@@ -113,7 +146,9 @@ def token_from_request(headers, cookies, query_params) -> Optional[str]:
     if authorization and authorization.lower().startswith("bearer "):
         return authorization[7:].strip()
 
-    if query_params is not None:
+    # Session tokens are never accepted from the query string: only the
+    # short-lived stream ticket is, and callers must opt in explicitly.
+    if allow_query and query_params is not None:
         query_token = query_params.get("token")
         if query_token:
             return query_token
