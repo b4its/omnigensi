@@ -226,6 +226,18 @@ export interface ClientConfig {
 export const api = {
 	// System
 	getClientConfig: () => apiFetch<ClientConfig>('/api/v1/config'),
+	changePassword: (currentPassword: string, newPassword: string) =>
+		apiFetch<{ authenticated: boolean; auth_enabled: boolean }>(
+			'/api/v1/auth/change-password',
+			{
+				method: 'POST',
+				body: JSON.stringify({
+					current_password: currentPassword,
+					new_password: newPassword
+				}),
+				retries: 0
+			}
+		),
 	getStats: () => apiFetch<SystemStats>('/api/v1/stats'),
 	checkHealth: () =>
 		apiFetch<{ status: string; service: string; version: string }>('/api/v1/health', {

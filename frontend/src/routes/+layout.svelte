@@ -24,6 +24,7 @@
     LogOut,
     Loader2,
     History,
+    Settings,
   } from 'lucide-svelte';
 
   let { children } = $props();
@@ -38,6 +39,7 @@
     { name: '[04] GRAPH BUILDER', href: '/workflows', icon: Network },
     { name: '[05] EXECUTION DECK', href: '/playground', icon: Terminal },
     { name: '[06] RUN HISTORY', href: '/executions', icon: History },
+    { name: '[07] SETTINGS', href: '/settings', icon: Settings },
   ];
 
   const isLoginRoute = $derived(page.url.pathname.startsWith('/login'));
