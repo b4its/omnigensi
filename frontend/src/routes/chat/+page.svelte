@@ -23,7 +23,8 @@
     User,
     Bot,
     AlertTriangle,
-    ChevronDown
+    ChevronDown,
+    Check
   } from 'lucide-svelte';
 
   interface UIMessage {
@@ -46,6 +47,8 @@
 
   let abortHandle: { abort: () => void } | null = null;
   let scroller: HTMLDivElement | undefined = $state();
+  let searchInput: HTMLInputElement | undefined = $state();
+  let pickerWrap: HTMLDivElement | undefined = $state();
 
   const selectedModel = $derived(
     models.find((m) => `${m.provider_id}::${m.model_id}` === selectedKey) ?? null
@@ -63,6 +66,88 @@
       .map(([id, v]) => ({ provider_id: id, provider_name: v.name, items: v.items }))
       .sort((a, b) => a.provider_name.localeCompare(b.provider_name));
   });
+
+  // Searchable model picker state.
+  let modelSearch = $state('');
+  let pickerOpen = $state(false);
+  let activeIndex = $state(0);
+
+  /** Models matching the search text, grouped the same way as `grouped`. */
+  const filteredGrouped = $derived.by(() => {
+    const q = modelSearch.trim().toLowerCase();
+    if (!q) return grouped;
+    return grouped
+      .map((g) => ({
+        ...g,
+        items: g.items.filter(
+          (m) =>
+            m.model_id.toLowerCase().includes(q) ||
+            (m.display_name ?? '').toLowerCase().includes(q) ||
+            m.provider_name.toLowerCase().includes(q)
+        )
+      }))
+      .filter((g) => g.items.length > 0);
+  });
+
+  /** Flat list of matches, used for keyboard navigation. */
+  const filteredFlat = $derived(filteredGrouped.flatMap((g) => g.items));
+
+  /** Reset the highlight to the top whenever the query changes. */
+  $effect(() => {
+    modelSearch;
+    activeIndex = 0;
+  });
+
+  function openPicker() {
+    if (streaming) return;
+    pickerOpen = true;
+    modelSearch = '';
+    activeIndex = 0;
+    // Focus the search box once it is in the DOM.
+    requestAnimationFrame(() => searchInput?.focus());
+  }
+
+  function chooseModel(m: ChatModelOption) {
+    selectedKey = `${m.provider_id}::${m.model_id}`;
+    pickerOpen = false;
+    modelSearch = '';
+  }
+
+  /** Close the picker when the operator clicks anywhere outside it. */
+  function handleDocumentPointerDown(e: PointerEvent) {
+    if (!pickerOpen) return;
+    const target = e.target as Node | null;
+    if (pickerWrap && target && !pickerWrap.contains(target)) {
+      pickerOpen = false;
+    }
+  }
+
+  function handlePickerKeydown(e: KeyboardEvent) {
+    if (!pickerOpen) {
+      if (e.key === 'ArrowDown' || e.key === 'Enter') {
+        e.preventDefault();
+        openPicker();
+      }
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      pickerOpen = false;
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (filteredFlat.length) activeIndex = (activeIndex + 1) % filteredFlat.length;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (filteredFlat.length)
+        activeIndex = (activeIndex - 1 + filteredFlat.length) % filteredFlat.length;
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const pick = filteredFlat[activeIndex];
+      if (pick) chooseModel(pick);
+    }
+  }
 
   async function loadModels() {
     loadingModels = true;
@@ -91,7 +176,8 @@
 
   /** Escape closes an in-flight stream so the UI never deadlocks. */
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && streaming) stopStream();
+    // The picker consumes Escape itself while it is open.
+    if (e.key === 'Escape' && streaming && !pickerOpen) stopStream();
   }
 
   async function sendMessage() {
@@ -177,7 +263,7 @@
   }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window on:keydown={handleKeydown} on:pointerdown={handleDocumentPointerDown} />
 
 <div class="space-y-4">
   <!-- Header -->
@@ -221,32 +307,100 @@
     </div>
   {:else}
     <!-- Model selector bar -->
-    <div class="border border-[var(--border-color)] bg-[var(--bg-surface)] p-3 chamfer-sm">
+    <div bind:this={pickerWrap} class="border border-[var(--border-color)] bg-[var(--bg-surface)] p-3 chamfer-sm">
       <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end font-code text-xs">
         <div class="sm:col-span-7">
           <label for="chat-model" class="block text-[var(--text-muted)] mb-1 uppercase font-bold text-[10px]">
             Model
           </label>
           <div class="relative">
-            <select
-              id="chat-model"
-              bind:value={selectedKey}
-              disabled={streaming}
-              class="w-full appearance-none px-3 py-2 pr-9 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)] disabled:opacity-60"
-            >
-              {#each grouped as group (group.provider_id)}
-                <optgroup label={group.provider_name}>
-                  {#each group.items as m (m.model_id)}
-                    <option value={`${m.provider_id}::${m.model_id}`}>
-                      {m.model_id}{m.is_default ? ' · default' : ''}
-                    </option>
-                  {/each}
-                </optgroup>
-              {/each}
-            </select>
-            <ChevronDown class="w-4 h-4 absolute right-3 top-2.5 text-[var(--text-muted)] pointer-events-none" />
+            <!-- Closed state: a button showing the current model. -->
+            {#if !pickerOpen}
+              <button
+                type="button"
+                id="chat-model"
+                onclick={openPicker}
+                disabled={streaming}
+                aria-haspopup="listbox"
+                aria-expanded={false}
+                class="w-full flex items-center justify-between gap-2 px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)] text-left hover:border-[var(--accent-primary)] focus:outline-none focus:border-[var(--accent-primary)] disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <span class="truncate">
+                  {selectedModel?.model_id ?? 'Select a model'}
+                  {#if selectedModel?.is_default}<span class="text-[var(--text-muted)]"> · default</span>{/if}
+                </span>
+                <ChevronDown class="w-4 h-4 shrink-0 text-[var(--text-muted)]" />
+              </button>
+            {:else}
+              <!-- Open state: a search box that filters the list below. -->
+              <input
+                id="chat-model"
+                type="text"
+                bind:value={modelSearch}
+                onkeydown={handlePickerKeydown}
+                placeholder="Search models..."
+                autocomplete="off"
+                aria-controls="chat-model-list"
+                class="w-full px-3 py-2 pr-9 bg-[var(--bg-elevated)] border border-[var(--accent-primary)] text-[var(--text-primary)] focus:outline-none"
+                bind:this={searchInput}
+              />
+              <ChevronDown class="w-4 h-4 absolute right-3 top-2.5 text-[var(--accent-primary)] pointer-events-none rotate-180" />
+            {/if}
           </div>
         </div>
+
+        <!-- Dropdown list, only while searching -->
+        {#if pickerOpen}
+          <div class="sm:col-span-12 relative">
+            <ul
+              id="chat-model-list"
+              role="listbox"
+              class="max-h-64 overflow-y-auto border border-[var(--border-color)] bg-[var(--bg-surface)] chamfer-sm font-code text-xs"
+            >
+              {#if filteredFlat.length === 0}
+                <li class="px-3 py-3 text-[var(--text-muted)] italic">
+                  No model matches "{modelSearch}".
+                </li>
+              {:else}
+                {#each filteredGrouped as group (group.provider_id)}
+                  <li class="px-3 py-1.5 text-[10px] uppercase font-bold text-[var(--text-muted)] bg-[var(--bg-elevated)]/60 border-b border-[var(--border-color)]/40 sticky top-0">
+                    {group.provider_name}
+                  </li>
+                  {#each group.items as m (m.model_id)}
+                    {@const flatIdx = filteredFlat.indexOf(m)}
+                    <li
+                      role="option"
+                      aria-selected={`${m.provider_id}::${m.model_id}` === selectedKey}
+                    >
+                      <button
+                        type="button"
+                        onclick={() => chooseModel(m)}
+                        onmouseenter={() => (activeIndex = flatIdx)}
+                        class="w-full flex items-center justify-between gap-2 px-3 py-2 text-left border-b border-[var(--border-color)]/30 last:border-b-0 transition-colors {flatIdx === activeIndex
+                          ? 'bg-[var(--accent-primary)]/15'
+                          : 'hover:bg-[var(--bg-elevated)]'}"
+                      >
+                        <span class="min-w-0 truncate {`${m.provider_id}::${m.model_id}` === selectedKey ? 'text-[var(--accent-primary)] font-bold' : 'text-[var(--text-primary)]'}">
+                          {m.model_id}
+                          {#if m.is_default}<span class="text-[10px] text-[var(--text-muted)]"> · default</span>{/if}
+                        </span>
+                        <span class="shrink-0 flex items-center gap-2 text-[10px] text-[var(--text-muted)]">
+                          {#if m.context_length}{Math.round(m.context_length / 1000)}k{/if}
+                          {#if `${m.provider_id}::${m.model_id}` === selectedKey}
+                            <Check class="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                          {/if}
+                        </span>
+                      </button>
+                    </li>
+                  {/each}
+                {/each}
+              {/if}
+            </ul>
+            <p class="mt-1 text-[10px] font-code text-[var(--text-muted)]">
+              {filteredFlat.length} of {models.length} models · ↑↓ to navigate · Enter to select · Esc to close
+            </p>
+          </div>
+        {/if}
         <div class="sm:col-span-3">
           <label for="chat-temperature" class="block text-[var(--text-muted)] mb-1 uppercase font-bold text-[10px]">
             Temperature: <span class="text-[var(--accent-primary)]">{temperature.toFixed(1)}</span>
