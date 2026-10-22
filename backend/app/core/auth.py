@@ -64,19 +64,50 @@ def _sign_payload(payload: Dict[str, object]) -> Tuple[str, int]:
     return f"{encoded}.{signature}", int(payload["exp"])  # type: ignore[arg-type]
 
 
-def issue_token(ttl_seconds: Optional[int] = None) -> Tuple[str, int]:
+def issue_token(
+    ttl_seconds: Optional[int] = None, token_version: int = 0
+) -> Tuple[str, int]:
     """Creates a signed session token.
+
+    ``token_version`` is compared against the value stored server-side on every
+    request, so incrementing it revokes every existing session immediately
+    (logout-everywhere, password rotation) without keeping a token table.
 
     Returns the token and its expiry as a unix timestamp.
     """
     ttl = settings.AUTH_TOKEN_TTL_SECONDS if ttl_seconds is None else ttl_seconds
     now = int(time.time())
     expires_at = now + ttl
-    payload = {"iat": now, "exp": expires_at, "scope": "session", "nonce": secrets.token_hex(8)}
+    payload = {
+        "iat": now,
+        "exp": expires_at,
+        "scope": "session",
+        "ver": int(token_version),
+        "nonce": secrets.token_hex(8),
+    }
     return _sign_payload(payload)
 
 
-def issue_stream_ticket(ttl_seconds: int = 120) -> Tuple[str, int]:
+def token_version_of(token: Optional[str]) -> Optional[int]:
+    """Returns the version claim of a signature-valid token, else None."""
+    if not token or "." not in token:
+        return None
+    encoded, _, signature = token.partition(".")
+    expected = _b64encode(
+        hmac.new(_secret(), encoded.encode("ascii"), hashlib.sha256).digest()
+    )
+    if not hmac.compare_digest(expected, signature):
+        return None
+    try:
+        payload: Dict[str, Any] = json.loads(_b64decode(encoded))
+        return int(payload.get("ver", 0))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def issue_stream_ticket(
+    ttl_seconds: int = 120, token_version: int = 0
+) -> Tuple[str, int]:
     """Creates a short-lived ticket for URL-based auth.
 
     ``EventSource`` and ``<a download>`` cannot set headers, so the credential
@@ -88,7 +119,13 @@ def issue_stream_ticket(ttl_seconds: int = 120) -> Tuple[str, int]:
     ttl = max(30, min(ttl_seconds, 900))
     now = int(time.time())
     expires_at = now + ttl
-    payload = {"iat": now, "exp": expires_at, "scope": "stream", "nonce": secrets.token_hex(8)}
+    payload = {
+        "iat": now,
+        "exp": expires_at,
+        "scope": "stream",
+        "ver": int(token_version),
+        "nonce": secrets.token_hex(8),
+    }
     return _sign_payload(payload)
 
 
@@ -163,6 +200,8 @@ def password_matches(candidate: Optional[str], stored_hash: Optional[str] = None
     """
     if candidate is None:
         return False
+    # An empty hash means "no rotation yet" (the row may exist only to hold a
+    # token version), so the environment value stays authoritative.
     if stored_hash:
         return verify_password_hash(candidate, stored_hash)
     return hmac.compare_digest(candidate, settings.APP_PASSWORD)

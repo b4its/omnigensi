@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select
 
+from app.core.auth_store import bump_token_version, current_token_version, stored_password_hash
 from app.core.auth import (
     hash_password,
     issue_stream_ticket,
@@ -34,11 +35,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 async def _stored_password_hash(db: AsyncSession) -> Optional[str]:
-    """Returns the rotated password hash, or None to fall back to the env."""
-    row = (
-        await db.execute(select(AuthCredential).order_by(AuthCredential.updated_at.desc()).limit(1))
-    ).scalar_one_or_none()
-    return row.password_hash if row else None
+    return await stored_password_hash(db)
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -114,7 +111,8 @@ async def login(
 
     login_throttle.record_success(key)
 
-    token, expires_at = issue_token()
+    version = await current_token_version(db)
+    token, expires_at = issue_token(token_version=version)
     _set_session_cookie(response, token)
     logger.info("Operator signed in")
     return LoginResponse(
@@ -126,17 +124,43 @@ async def login(
 
 
 @router.post("/logout", response_model=SessionInfo)
-async def logout(response: Response) -> Any:
-    """Clears the session cookie.
+async def logout(
+    response: Response, db: AsyncSession = Depends(get_db)
+) -> Any:
+    """Signs out everywhere.
 
-    Tokens are stateless, so a bearer token the client already holds stays
-    valid until it expires; clients should discard it locally.
+    Clears the cookie and bumps the token version, so a bearer token a client
+    still holds stops working immediately instead of remaining valid for the
+    rest of its 7-day lifetime.
     """
     _clear_session_cookie(response)
+    if settings.AUTH_ENABLED:
+        await bump_token_version(db)
     return SessionInfo(
         authenticated=False,
         auth_enabled=settings.AUTH_ENABLED,
     )
+
+
+@router.post("/revoke-sessions", response_model=SessionInfo)
+async def revoke_sessions(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Invalidates every session token without changing the password.
+
+    Useful when a device is lost. The caller is signed out too.
+    """
+    token = token_from_request(
+        request.headers, request.cookies, request.query_params, allow_query=False
+    )
+    if settings.AUTH_ENABLED and not verify_token(token):
+        raise HTTPException(status_code=401, detail="A valid session is required")
+
+    await bump_token_version(db)
+    _clear_session_cookie(response)
+    return SessionInfo(authenticated=False, auth_enabled=settings.AUTH_ENABLED)
 
 
 @router.get("/session", response_model=SessionInfo)
@@ -157,7 +181,9 @@ async def session(request: Request) -> Any:
 
 
 @router.post("/stream-ticket", response_model=StreamTicketResponse)
-async def create_stream_ticket(request: Request) -> Any:
+async def create_stream_ticket(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> Any:
     """Exchanges a valid session for a short-lived, stream-scoped ticket.
 
     The ticket is the only credential accepted in a URL, so the long-lived
@@ -177,7 +203,8 @@ async def create_stream_ticket(request: Request) -> Any:
             detail="A valid session is required to obtain a stream ticket",
         )
 
-    ticket, expires_at = issue_stream_ticket()
+    version = await current_token_version(db)
+    ticket, expires_at = issue_stream_ticket(token_version=version)
     return StreamTicketResponse(ticket=ticket, expires_at=expires_at)
 
 
@@ -225,8 +252,9 @@ async def change_password(
     ).scalar_one_or_none()
     if existing:
         existing.password_hash = new_hash
+        existing.token_version = (existing.token_version or 1) + 1
     else:
-        db.add(AuthCredential(password_hash=new_hash))
+        db.add(AuthCredential(password_hash=new_hash, token_version=2))
     await db.commit()
 
     # Force a fresh login with the new password.

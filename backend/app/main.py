@@ -9,7 +9,13 @@ from sqlalchemy import text
 import redis.asyncio as aioredis
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.core.auth import is_public_path, token_from_request, verify_token
+from app.core.auth import (
+    is_public_path,
+    token_from_request,
+    token_version_of,
+    verify_token,
+)
+from app.core.auth_store import current_token_version
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, engine, init_db
 from app.core.mcp_store import load_persisted_servers
@@ -98,14 +104,35 @@ async def require_session(request: Request, call_next):
     token = token_from_request(
         request.headers, request.cookies, request.query_params, allow_query=False
     )
-    authenticated = verify_token(token)
+    credential = token if verify_token(token) else None
 
     # URL-based access (EventSource, <a download>) may only use a short-lived
     # stream ticket, never the long-lived session token.
-    if not authenticated and request.query_params.get("token"):
-        authenticated = verify_token(
-            request.query_params.get("token"), required_scope="stream"
-        )
+    if credential is None and request.query_params.get("token"):
+        candidate = request.query_params.get("token")
+        if verify_token(candidate, required_scope="stream"):
+            credential = candidate
+
+    authenticated = credential is not None
+
+    # A signature-valid credential is still refused if it predates a
+    # revocation (logout-everywhere / password rotation). The check applies to
+    # whichever credential authenticated the request - session token or ticket.
+    if authenticated:
+        try:
+            async with AsyncSessionLocal() as db:
+                expected = await current_token_version(db)
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            logger.error("Could not read token version: %s", exc)
+            expected = None
+        if expected is not None and token_version_of(credential) != expected:
+            logger.info(
+                "Rejected stale credential (version %s, expected %s) for %s",
+                token_version_of(credential),
+                expected,
+                request.url.path,
+            )
+            authenticated = False
 
     if not authenticated:
         # This middleware sits outside the request-id middleware, so the id is
