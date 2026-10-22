@@ -177,9 +177,12 @@ async def execute_mcp_tool(server_name: str, tool_name: str, payload: ToolExecut
         result = await mcp_manager.execute_tool(server_name, tool_name, payload.arguments)
         if not isinstance(result, dict):
             return MCPToolExecuteResponse(status="success", result=result)
+
+        # Preserve the whole bridge payload: it may carry diagnostics such as
+        # `tool_available: false` that the caller must not lose.
         return MCPToolExecuteResponse(
             status=str(result.get("status", "success")),
-            result=result.get("result"),
+            result=result if "result" not in result else result.get("result"),
             message=result.get("message"),
         )
     except Exception as e:

@@ -25,6 +25,14 @@ class ExecutionResponse(BaseModel):
     status: str
     task_prompt: str
     final_output: Optional[str] = None
+    error_message: Optional[str] = Field(
+        default=None,
+        description="Failure reason for failed/cancelled runs, separate from final_output",
+    )
+    simulated: bool = Field(
+        default=False,
+        description="True when the provider failed and content was simulated",
+    )
     generated_files: List[Dict[str, Any]] = Field(default_factory=list)
     execution_logs: List[Dict[str, Any]] = Field(default_factory=list)
     total_tokens: int = 0

@@ -21,3 +21,7 @@ class DynamicTeamState(TypedDict):
     revision_count: int
     generated_files: Annotated[List[Dict[str, Any]], operator.add]
     execution_history: Annotated[List[Dict[str, Any]], operator.add]
+    # Set when any node had to fall back to simulated output because the
+    # provider failed. Surfaced to clients so a degraded run is never
+    # mistaken for a real model response.
+    simulated: Annotated[bool, operator.or_]

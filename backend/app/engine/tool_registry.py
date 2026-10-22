@@ -312,11 +312,17 @@ def mcp_create_entities(entities: List[Dict[str, Any]]) -> Dict[str, Any]:
     Args:
         entities: List of entity objects with name, entityType, and observations
     """
+    # There is no real memory backend wired up yet. Reporting success here
+    # would let the model believe it persisted knowledge that was discarded.
     return {
-        "status": "success",
+        "status": "error",
         "action": "mcp_memory_sync",
-        "message": f"Successfully committed {len(entities)} entities to MCP Knowledge Graph",
-        "entities_count": len(entities),
+        "message": (
+            "No MCP memory server is connected. Entities were NOT persisted. "
+            "Register a memory MCP server to enable graph storage."
+        ),
+        "entities_count": 0,
+        "entities_received": len(entities),
     }
 
 
@@ -325,14 +331,15 @@ def mcp_read_graph() -> Dict[str, Any]:
     """
     [Model Context Protocol] Reads current knowledge nodes and relationships from MCP Memory graph.
     """
+    # Returning hardcoded "entities" made an empty graph look populated.
     return {
-        "status": "success",
+        "status": "error",
         "action": "mcp_memory_read",
-        "entities": [
-            {"name": "Omnigensi-Architecture", "type": "System", "status": "active"},
-            {"name": "Local-Device-Bridge", "type": "Subsystem", "status": "verified"},
-            {"name": "MCP-Orchestration", "type": "Protocol", "status": "connected"},
-        ],
+        "message": (
+            "No MCP memory server is connected. The knowledge graph is empty; "
+            "Nothing was read."
+        ),
+        "entities": [],
     }
 
 

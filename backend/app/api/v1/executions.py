@@ -106,6 +106,19 @@ async def run_execution_background(
                 model_name=primary_model,
             )
 
+            # A provider failure that fell back to simulated content must not
+            # be presented as a genuine result.
+            simulated = bool(final_state.get("simulated"))
+            simulation_reason = None
+            if simulated:
+                reasons = [
+                    entry.get("reason")
+                    for entry in execution_history
+                    if isinstance(entry, dict)
+                    and entry.get("event") == "simulated_fallback"
+                ]
+                simulation_reason = "; ".join(r for r in reasons if r)[:1000] or None
+
             # Update DB
             execution.status = "completed"
             execution.final_output = final_output
@@ -113,6 +126,12 @@ async def run_execution_background(
             execution.execution_logs = execution_history
             execution.total_tokens = metrics["total_tokens"]
             execution.estimated_cost_usd = metrics["estimated_cost_usd"]
+            execution.simulated = simulated
+            execution.error_message = (
+                f"Provider call failed, content was simulated: {simulation_reason}"
+                if simulated
+                else None
+            )
             execution.completed_at = datetime.now(timezone.utc)
             await db.commit()
 
@@ -121,6 +140,7 @@ async def run_execution_background(
                 "workflow_complete",
                 {
                     "status": "completed",
+                    "simulated": simulated,
                     "final_output": final_output,
                     "generated_files": generated_files,
                     "execution_logs": execution_history,
@@ -136,7 +156,7 @@ async def run_execution_background(
                     exec_obj = await db_cancel.get(WorkflowExecution, execution_id)
                     if exec_obj and exec_obj.status == "running":
                         exec_obj.status = "cancelled"
-                        exec_obj.final_output = "Execution aborted by operator."
+                        exec_obj.error_message = "Execution aborted by operator."
                         exec_obj.completed_at = datetime.now(timezone.utc)
                         await db_cancel.commit()
                 await publisher.publish(
@@ -149,7 +169,8 @@ async def run_execution_background(
         except Exception as e:
             logger.error(f"Error during graph execution: {e}", exc_info=True)
             execution.status = "failed"
-            execution.final_output = f"Execution halted with error: {str(e)}"
+            execution.error_message = f"{type(e).__name__}: {e}"[:2000]
+            execution.generated_files = []
             execution.completed_at = datetime.now(timezone.utc)
             await db.commit()
 
@@ -375,7 +396,7 @@ async def cancel_execution(
         task.cancel()
 
     execution.status = "cancelled"
-    execution.final_output = "Execution aborted by operator."
+    execution.error_message = "Execution aborted by operator."
     execution.completed_at = datetime.now(timezone.utc)
     await db.commit()
 

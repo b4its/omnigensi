@@ -622,8 +622,24 @@ def build_dynamic_agent_node(
                 }
 
         except Exception as err:
-            logger.warning(f"Agent {agent.name} LLM call failed ({err}), activating resilient fallback: {err}")
-            return await _simulate_agent_fallback(agent, state, node_id, publisher)
+            logger.warning(
+                f"Agent {agent.name} LLM call failed ({err}), using simulated fallback"
+            )
+            fallback = await _simulate_agent_fallback(agent, state, node_id, publisher)
+            # Never let simulated content masquerade as a real completion.
+            fallback["simulated"] = True
+            fallback["simulation_reason"] = f"{type(err).__name__}: {err}"[:500]
+            fallback["execution_history"] = list(
+                fallback.get("execution_history", [])
+            ) + [
+                {
+                    "node_id": node_id,
+                    "agent_name": agent.name,
+                    "event": "simulated_fallback",
+                    "reason": f"{type(err).__name__}: {err}"[:500],
+                }
+            ]
+            return fallback
 
     return agent_node
 

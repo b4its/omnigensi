@@ -116,5 +116,19 @@ async def test_graph_with_supervisor_and_worker():
     }
 
     final_state = await compiled.ainvoke(init_state)
-    assert len(final_state["execution_history"]) == 2
-    assert final_state["execution_history"][1]["node_type"] == "supervisor"
+
+    # Every node that runs contributes one history entry. A node whose provider
+    # call fails now ALSO records a `simulated_fallback` entry so the failure is
+    # traceable instead of being silently replaced by fake content.
+    real_entries = [
+        e for e in final_state["execution_history"] if e.get("event") != "simulated_fallback"
+    ]
+    assert [e["node_type"] for e in real_entries] == ["worker", "supervisor"]
+
+    # The demo key cannot authenticate, so the run must be flagged as simulated.
+    assert final_state.get("simulated") is True
+    fallbacks = [
+        e for e in final_state["execution_history"] if e.get("event") == "simulated_fallback"
+    ]
+    assert fallbacks, "a failed provider call must be recorded, not hidden"
+    assert all(f.get("reason") for f in fallbacks)

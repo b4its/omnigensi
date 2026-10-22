@@ -1,6 +1,16 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Text, Integer, Numeric, DateTime, ForeignKey, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
@@ -8,6 +18,13 @@ from app.core.database import Base
 
 class WorkflowExecution(Base):
     __tablename__ = "workflow_executions"
+    # The history endpoints filter by workflow/status and always sort by
+    # started_at, so these columns must be indexed.
+    __table_args__ = (
+        Index("ix_workflow_executions_workflow_id", "workflow_id"),
+        Index("ix_workflow_executions_status", "status"),
+        Index("ix_workflow_executions_started_at", "started_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -22,6 +39,12 @@ class WorkflowExecution(Base):
     )  # 'pending', 'running', 'waiting_approval', 'completed', 'failed'
     task_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     final_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Structured failure reason. Errors used to be concatenated into
+    # final_output, which made them indistinguishable from real content.
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # True when at least one agent had to emit simulated content because its
+    # provider call failed.
+    simulated: Mapped[bool] = mapped_column(Boolean, default=False)
     generated_files: Mapped[list] = mapped_column(JSONB, default=list)
     execution_logs: Mapped[list] = mapped_column(JSONB, default=list)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)

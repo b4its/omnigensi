@@ -305,15 +305,24 @@ class MCPBridgeManager:
             return {"status": "success", "result": list_local_workspace_files.invoke({})}
         elif "memory" in tool_name or "entities" in tool_name:
             return {
-                "status": "success",
-                "message": f"MCP knowledge graph updated with: {arguments}",
-                "entities_count": len(arguments.get("entities", [])),
+                "status": "error",
+                "message": (
+                    "No live MCP memory backend is connected; nothing was persisted."
+                ),
+                "entities_count": 0,
             }
 
+        # Reporting success for an unknown tool would be a lie: the caller
+        # (often the model itself) would proceed believing work was done.
         return {
-            "status": "success",
-            "message": f"MCP tool '{tool_name}' executed successfully on server '{server_name}'",
+            "status": "error",
+            "message": (
+                f"MCP tool '{tool_name}' has no live handler on server "
+                f"'{server_name}'. The MCP server is unreachable or the tool is "
+                "not implemented locally, so nothing was executed."
+            ),
             "arguments": arguments,
+            "tool_available": False,
         }
 
     def create_langchain_tool(self, server_name: str, tool_def: Dict[str, Any]) -> StructuredTool:

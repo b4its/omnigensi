@@ -67,4 +67,9 @@ async def test_mcp_api_endpoints():
             json={"arguments": {"query": "status"}},
         )
         assert exec_res.status_code == 200
-        assert exec_res.json()["status"] == "success"
+        # The server is unreachable (no real MCP process), so the call must
+        # report an error instead of a fabricated "success".
+        body = exec_res.json()
+        assert body["status"] == "error"
+        assert body["result"]["tool_available"] is False
+        assert "nothing was executed" in body["result"]["message"]
