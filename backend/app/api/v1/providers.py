@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import Pagination
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import encrypt_api_key, decrypt_api_key
 from app.engine.provider_probe import discover_models, probe_chat
@@ -521,7 +522,10 @@ async def test_provider_connection(
     last_status: Optional[int] = None
     last_url: Optional[str] = None
 
-    async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+    async with httpx.AsyncClient(
+        timeout=settings.PROVIDER_TIMEOUT_SECONDS,
+        verify=settings.PROVIDER_TLS_VERIFY,
+    ) as client:
         for url in candidates:
             try:
                 resp = await client.get(url, headers=headers)

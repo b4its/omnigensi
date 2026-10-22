@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+from app.core.config import settings
+
 logger = logging.getLogger("omnigensi.providers")
 
 REQUEST_TIMEOUT = 12.0
@@ -92,7 +94,9 @@ async def discover_models(
     last_status: Optional[int] = None
     last_url: Optional[str] = None
 
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, verify=False) as client:
+    async with httpx.AsyncClient(
+        timeout=REQUEST_TIMEOUT, verify=settings.PROVIDER_TLS_VERIFY
+    ) as client:
         for url in _model_endpoints(base_url):
             try:
                 resp = await client.get(url, headers=headers)
@@ -215,7 +219,9 @@ async def probe_chat(
 
     started = time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=CHAT_TIMEOUT, verify=False) as client:
+        async with httpx.AsyncClient(
+            timeout=CHAT_TIMEOUT, verify=settings.PROVIDER_TLS_VERIFY
+        ) as client:
             resp = await client.post(url, headers=headers, json=body)
             latency = int((time.perf_counter() - started) * 1000)
 

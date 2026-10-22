@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     # Leave empty to auto-detect from the incoming request.
     PUBLIC_BASE_URL: str = ""
 
+    # --- Outbound provider requests --------------------------------------
+    # TLS verification for calls to LLM providers (which carry the decrypted
+    # API key). Verification is ON by default; disabling it is an explicit
+    # opt-in for self-hosted endpoints with a self-signed certificate.
+    PROVIDER_TLS_VERIFY: bool = True
+    PROVIDER_TIMEOUT_SECONDS: float = 15.0
+
     # --- Authentication ---------------------------------------------------
     # Single shared operator password. This is deliberately simple: one
     # password guards the whole instance, no users or roles.
