@@ -27,6 +27,7 @@
     Settings,
     FolderOpen,
     MessageSquare,
+    Cable,
   } from 'lucide-svelte';
 
   let { children } = $props();
@@ -44,6 +45,7 @@
     { name: '[07] ARTIFACTS', href: '/files', icon: FolderOpen },
     { name: '[08] SETTINGS', href: '/settings', icon: Settings },
     { name: '[09] AI CHAT', href: '/chat', icon: MessageSquare },
+    { name: '[10] INTEGRATIONS', href: '/integrations', icon: Cable },
   ];
 
   const isLoginRoute = $derived(page.url.pathname.startsWith('/login'));

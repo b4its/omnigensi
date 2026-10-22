@@ -7,6 +7,7 @@
     disabled?: boolean;
     type?: 'button' | 'submit' | 'reset';
     onclick?: (e: MouseEvent) => void;
+    title?: string;
     children?: Snippet;
     class?: string;
   }
@@ -17,6 +18,7 @@
     disabled = false,
     type = 'button',
     onclick,
+    title,
     children,
     class: customClass = '',
   }: Props = $props();
@@ -38,6 +40,7 @@
 
 <button
   {type}
+  {title}
   {disabled}
   {onclick}
   class="font-hud tracking-wider transition-all duration-150 inline-flex items-center justify-center gap-2 chamfer-sm cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed {sizeClasses[size]} {variantClasses[variant]} {customClass}"

@@ -33,6 +33,44 @@ const API_BASE = resolveApiBase();
 
 export { API_BASE };
 
+export interface IntegrationClient {
+	id: string;
+	name: string;
+	description?: string | null;
+	target_url: string;
+	health_endpoint: string;
+	api_key: string;
+	is_active: boolean;
+	allowed_models: string[];
+	allowed_workflows: string[];
+	allowed_endpoints: string[];
+	status: 'online' | 'offline' | 'degraded' | 'unknown' | string;
+	last_status_code?: number | null;
+	last_latency_ms?: number | null;
+	last_checked_at?: string | null;
+	last_error?: string | null;
+	target_server?: string | null;
+	last_handshake_at?: string | null;
+	inbound_requests_count: number;
+	extra_metadata?: Record<string, any>;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface IntegrationProbeResult {
+	client_id: string;
+	name: string;
+	target_url: string;
+	full_url: string;
+	status: string;
+	status_code?: number | null;
+	latency_ms?: number | null;
+	server_header?: string | null;
+	error?: string | null;
+	headers: Record<string, string>;
+	checked_at: string;
+}
+
 export interface RequestOptions extends RequestInit {
 	/** Query string parameters appended to the endpoint. */
 	params?: Record<string, string | number | boolean | undefined | null>;
@@ -717,5 +755,61 @@ export const api = {
 		} catch {
 			return false;
 		}
-	}
+	},
+
+	// External Project Integrations & Client Registry
+	getIntegrationClients: () => apiFetch<IntegrationClient[]>('/api/v1/integrations/clients'),
+	getIntegrationClient: (id: string) =>
+		apiFetch<IntegrationClient>(`/api/v1/integrations/clients/${id}`),
+	registerIntegrationClient: (
+		data: {
+			name: string;
+			description?: string | null;
+			target_url: string;
+			health_endpoint?: string;
+			is_active?: boolean;
+			allowed_models?: string[];
+			allowed_workflows?: string[];
+			allowed_endpoints?: string[];
+		},
+		probeImmediately = true
+	) =>
+		apiFetch<IntegrationClient>('/api/v1/integrations/clients', {
+			method: 'POST',
+			params: { probe_immediately: probeImmediately },
+			body: JSON.stringify(data)
+		}),
+	updateIntegrationClient: (id: string, data: Partial<IntegrationClient>) =>
+		apiFetch<IntegrationClient>(`/api/v1/integrations/clients/${id}`, {
+			method: 'PUT',
+			body: JSON.stringify(data)
+		}),
+	deleteIntegrationClient: (id: string) =>
+		apiFetch<void>(`/api/v1/integrations/clients/${id}`, { method: 'DELETE' }),
+	regenerateIntegrationClientKey: (id: string) =>
+		apiFetch<IntegrationClient>(`/api/v1/integrations/clients/${id}/regenerate-key`, {
+			method: 'POST'
+		}),
+	pingIntegrationClient: (id: string) =>
+		apiFetch<IntegrationProbeResult>(`/api/v1/integrations/clients/${id}/ping`, {
+			method: 'POST'
+		}),
+	pingAllIntegrationClients: () =>
+		apiFetch<IntegrationProbeResult[]>('/api/v1/integrations/ping-all', { method: 'POST' }),
+	seedXishieIntegration: () =>
+		apiFetch<IntegrationClient>('/api/v1/integrations/seed-xishie', { method: 'POST' }),
+	testExternalHandshake: (apiKey: string) =>
+		apiFetch<any>('/api/v1/integrations/v1/handshake', {
+			headers: { 'X-API-Key': apiKey }
+		}),
+	testExternalChat: (apiKey: string, prompt: string, model?: string) =>
+		apiFetch<any>('/api/v1/integrations/v1/chat/completions', {
+			method: 'POST',
+			headers: { 'X-API-Key': apiKey },
+			body: JSON.stringify({
+				messages: [{ role: 'user', content: prompt }],
+				model: model || undefined,
+				stream: false
+			})
+		})
 };
