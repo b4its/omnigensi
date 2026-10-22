@@ -153,8 +153,12 @@ async def test_bearer_token_grants_access():
 
 
 @pytest.mark.asyncio
-async def test_query_token_grants_access_for_event_sources():
-    """EventSource cannot send headers, so the stream accepts ?token=."""
+async def test_stream_ticket_grants_access_but_session_token_does_not():
+    """EventSource cannot send headers, so URL access uses a short ticket.
+
+    The long-lived session token must never be accepted from a query string:
+    it would leak into access logs and Referer headers.
+    """
     async with make_client() as client:
         workflows = (await client.get("/api/v1/workflows")).json()
         created = await client.post(
@@ -164,14 +168,25 @@ async def test_query_token_grants_access_for_event_sources():
         exec_id = created.json()["id"]
         await client.post(f"/api/v1/executions/{exec_id}/cancel")
 
-    token, _ = issue_token()
+    from app.core.auth import issue_stream_ticket
+
+    session_token, _ = issue_token()
+    ticket, _ = issue_stream_ticket()
+
     async with _anon_client() as client:
         anonymous = await client.get(f"/api/v1/executions/{exec_id}/stream")
         assert anonymous.status_code == 401
 
-        authed = await client.get(f"/api/v1/executions/{exec_id}/stream?token={token}")
-        # Streaming responses cannot be asserted on directly with ASGITransport
-        # without consuming them, so only the status gate is checked here.
+        # A long-lived session token in the URL is rejected.
+        rejected = await client.get(
+            f"/api/v1/executions/{exec_id}/stream?token={session_token}"
+        )
+        assert rejected.status_code == 401
+
+        # A short-lived stream ticket is accepted.
+        authed = await client.get(
+            f"/api/v1/executions/{exec_id}/stream?token={ticket}"
+        )
         assert authed.status_code == 200
 
 
