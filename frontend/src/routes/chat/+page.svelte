@@ -192,6 +192,8 @@
     input = '';
     streaming = true;
     streamText = '';
+    streamHtml = '';
+    lastStreamRender = 0;
     scrollToBottom();
 
     // Full history (assistant turns included) keeps conversational context.
@@ -210,6 +212,7 @@
       {
         onToken: (chunk) => {
           streamText += chunk;
+          renderStream();
           scrollToBottom();
         },
         onDone: (info) => {
@@ -245,6 +248,7 @@
       notify.error(failed);
     }
     streamText = '';
+    streamHtml = '';
     scrollToBottom();
   }
 
@@ -260,6 +264,99 @@
 
   function renderMarkdown(text: string): string {
     return sanitizeHtml(marked.parse(text) as string);
+  }
+
+  /**
+   * Chrome rendered for a streamed reply.
+   *
+   * Re-parsing the whole Markdown on every token is wasteful once the answer
+   * grows, so the streamed body is re-rendered at most ~10 times a second.
+   * The final `done` text renders once more, unthrottled, so nothing is lost.
+   */
+  let streamHtml = $state('');
+  let lastStreamRender = 0;
+  const STREAM_RENDER_MS = 100;
+
+  function renderStream() {
+    const now = performance.now();
+    if (now - lastStreamRender < STREAM_RENDER_MS) return;
+    lastStreamRender = now;
+    streamHtml = renderMarkdown(streamText);
+  }
+
+  /**
+   * Post-processes rendered Markdown to make it interactive:
+   *   - code blocks get a language label and a COPY button,
+   *   - links open in a new tab without leaking the referrer,
+   *   - tables are wrapped so wide ones scroll instead of breaking layout.
+   *
+   * Runs on the DOM after `{@html}`, so the HTML sanitiser stays strict and a
+   * plain anchor/button is enough (no inline handlers in the markup).
+   */
+  function enhanceMarkdown(node: HTMLElement) {
+    const decorate = () => {
+      node.querySelectorAll('a[href]').forEach((a) => {
+        const href = a.getAttribute('href') ?? '';
+        if (href.startsWith('#')) return;
+        a.setAttribute('target', '_blank');
+        a.setAttribute('rel', 'noopener noreferrer');
+      });
+
+      node.querySelectorAll('pre').forEach((pre) => {
+        if ((pre as HTMLElement).dataset.enhanced === '1') return;
+        (pre as HTMLElement).dataset.enhanced = '1';
+
+        // Language comes from `code.language-xxx` emitted by marked.
+        const code = pre.querySelector('code');
+        const lang = code?.className.match(/language-([\w+-]+)/)?.[1] ?? 'text';
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'md-code-block';
+        pre.parentNode?.insertBefore(wrapper, pre);
+        wrapper.appendChild(pre);
+
+        const bar = document.createElement('div');
+        bar.className = 'md-code-bar';
+
+        const label = document.createElement('span');
+        label.className = 'md-code-lang';
+        label.textContent = lang;
+
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.className = 'md-code-copy';
+        copy.textContent = 'COPY';
+        copy.setAttribute('aria-label', 'Copy code to clipboard');
+        copy.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(code?.textContent ?? '');
+            copy.textContent = 'COPIED';
+            setTimeout(() => (copy.textContent = 'COPY'), 1500);
+          } catch {
+            copy.textContent = 'FAILED';
+            setTimeout(() => (copy.textContent = 'COPY'), 1500);
+          }
+        });
+
+        bar.appendChild(label);
+        bar.appendChild(copy);
+        wrapper.insertBefore(bar, pre);
+      });
+
+      // Wide tables scroll horizontally instead of forcing the bubble wide.
+      node.querySelectorAll('table').forEach((table) => {
+        if (table.parentElement?.classList.contains('md-table-scroll')) return;
+        const wrap = document.createElement('div');
+        wrap.className = 'md-table-scroll';
+        table.parentNode?.insertBefore(wrap, table);
+        wrap.appendChild(table);
+      });
+    };
+
+    decorate();
+    return {
+      update: decorate
+    };
   }
 </script>
 
@@ -476,7 +573,10 @@
                 {msg.content}
               </div>
             {:else}
-              <div class="prose prose-xs dark-prose max-w-none text-xs font-code text-[var(--text-primary)] px-3 py-2 chamfer-sm bg-[var(--bg-elevated)]/60 border border-[var(--border-color)]/60">
+              <div
+                class="md-body dark-prose max-w-none text-[13px] leading-relaxed text-[var(--text-primary)] px-3.5 py-2.5 chamfer-sm bg-[var(--bg-elevated)]/60 border border-[var(--border-color)]/60"
+                use:enhanceMarkdown
+              >
                 {@html renderMarkdown(msg.content)}
               </div>
               {#if msg.model_id}
@@ -494,8 +594,11 @@
           </div>
           <div class="min-w-0 max-w-[85%]">
             {#if streamText}
-              <div class="prose prose-xs dark-prose max-w-none text-xs font-code text-[var(--text-primary)] px-3 py-2 chamfer-sm bg-[var(--bg-elevated)]/60 border border-[var(--border-color)]/60">
-                {@html renderMarkdown(streamText)}
+              <div
+                class="md-body dark-prose max-w-none text-[13px] leading-relaxed text-[var(--text-primary)] px-3.5 py-2.5 chamfer-sm bg-[var(--bg-elevated)]/60 border border-[var(--border-color)]/60"
+                use:enhanceMarkdown
+              >
+                {@html streamHtml}
               </div>
             {:else}
               <div class="px-3 py-2 text-xs font-code text-[var(--text-muted)] italic">

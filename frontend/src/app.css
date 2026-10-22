@@ -193,6 +193,146 @@ body {
   border-color: var(--border-color);
 }
 
+/*
+ * Rendered Markdown body for AI chat replies.
+ *
+ * Uses a proportional font for prose (monospace everywhere hurts readability)
+ * while keeping code in a monospace face. Spacing is tuned tight so a reply
+ * reads well inside a chat bubble on both desktop and mobile.
+ */
+.md-body {
+  font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+.md-body > :first-child { margin-top: 0; }
+.md-body > :last-child { margin-bottom: 0; }
+
+.md-body :where(p) { margin: 0.5em 0; }
+.md-body :where(h1, h2, h3, h4, h5, h6) {
+  font-weight: 700;
+  line-height: 1.25;
+  margin: 0.9em 0 0.4em;
+  font-family: 'Space Grotesk', sans-serif;
+}
+.md-body :where(h1) { font-size: 1.35em; }
+.md-body :where(h2) { font-size: 1.2em; }
+.md-body :where(h3) { font-size: 1.08em; }
+.md-body :where(h4, h5, h6) { font-size: 1em; }
+
+.md-body :where(ul, ol) {
+  margin: 0.5em 0;
+  padding-left: 1.35em;
+}
+.md-body :where(ul) { list-style: disc; }
+.md-body :where(ol) { list-style: decimal; }
+.md-body :where(li) { margin: 0.2em 0; }
+.md-body :where(li > ul, li > ol) { margin: 0.2em 0; }
+
+.md-body :where(a) {
+  color: var(--accent-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md-body :where(strong, b) { font-weight: 700; }
+.md-body :where(em, i) { font-style: italic; }
+
+.md-body :where(hr) {
+  border: 0;
+  border-top: 1px solid var(--border-color);
+  margin: 1em 0;
+}
+
+/* Inline code only; block code is handled by .md-code-block below. */
+.md-body :where(:not(pre) > code) {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.9em;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  color: var(--accent-primary);
+  white-space: break-spaces;
+}
+
+.md-body :where(blockquote) {
+  border-left: 3px solid var(--accent-primary);
+  background: var(--bg-elevated);
+  margin: 0.6em 0;
+  padding: 0.35em 0.75em;
+  color: var(--text-muted);
+}
+
+/* Code block with its own language label + copy button bar. */
+.md-code-block {
+  margin: 0.7em 0;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+.md-code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0.6rem;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-color);
+}
+.md-code-lang {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.md-code-copy {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--accent-primary);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, transparent);
+  border-radius: 3px;
+  padding: 0.1rem 0.5rem;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.md-code-copy:hover { background: color-mix(in srgb, var(--accent-primary) 15%, transparent); }
+.md-code-block pre {
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  overflow-x: auto;
+  background: var(--bg-surface);
+}
+.md-code-block pre code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--text-primary);
+  background: none;
+  border: 0;
+  padding: 0;
+  white-space: pre;
+}
+
+/* Wide tables scroll instead of stretching the chat bubble. */
+.md-table-scroll { overflow-x: auto; margin: 0.6em 0; }
+.md-body :where(table) {
+  border-collapse: collapse;
+  width: auto;
+  min-width: 100%;
+  font-size: 0.9em;
+}
+.md-body :where(th, td) {
+  border: 1px solid var(--border-color);
+  padding: 0.3em 0.6em;
+  text-align: left;
+}
+.md-body :where(thead th) { background: var(--bg-elevated); font-weight: 700; }
+
 /* Keyboard focus must stay visible: inputs intentionally remove the default
    outline and otherwise only shift a 1px border colour. */
 :focus-visible {
