@@ -129,10 +129,42 @@ def verify_token(token: Optional[str], required_scope: Optional[str] = None) -> 
     return True
 
 
-def password_matches(candidate: Optional[str]) -> bool:
-    """Constant-time password comparison."""
+PBKDF2_ITERATIONS = 260_000
+
+
+def hash_password(plain: str) -> str:
+    """PBKDF2-HMAC-SHA256 hash with a per-password random salt."""
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", plain.encode("utf-8"), salt.encode("ascii"), PBKDF2_ITERATIONS
+    )
+    return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt}${digest.hex()}"
+
+
+def verify_password_hash(plain: str, stored: str) -> bool:
+    """Checks a password against a stored PBKDF2 hash."""
+    try:
+        algorithm, iterations, salt, expected = stored.split("$")
+        if algorithm != "pbkdf2_sha256":
+            return False
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", plain.encode("utf-8"), salt.encode("ascii"), int(iterations)
+        )
+    except (ValueError, AttributeError):
+        return False
+    return hmac.compare_digest(digest.hex(), expected)
+
+
+def password_matches(candidate: Optional[str], stored_hash: Optional[str] = None) -> bool:
+    """Constant-time password comparison.
+
+    When a stored hash exists (the operator changed the password from the UI)
+    it takes precedence over the environment default.
+    """
     if candidate is None:
         return False
+    if stored_hash:
+        return verify_password_hash(candidate, stored_hash)
     return hmac.compare_digest(candidate, settings.APP_PASSWORD)
 
 

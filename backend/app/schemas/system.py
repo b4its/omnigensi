@@ -171,3 +171,14 @@ class StreamTicketResponse(BaseModel):
     ticket: str
     expires_at: int
 
+
+class ChangePasswordRequest(BaseModel):
+    """Rotate the shared operator password."""
+
+    current_password: str = Field(..., min_length=1, max_length=256)
+    new_password: str = Field(
+        ...,
+        min_length=8,
+        max_length=256,
+        description="At least 8 characters. The default is deliberately rejected.",
+    )
