@@ -1,24 +1,28 @@
 /**
  * Export and import for the Naskah Studio editor.
  *
- * The project ships no document libraries (no docx/jszip), so instead of a
- * fragile hand-rolled OOXML zip we emit the two formats that every word
- * processor opens without a plugin:
+ * The project ships no document-conversion libraries, so we emit the formats
+ * that every word processor opens without a plugin. The heavy formats are built
+ * in `fileFormats.ts` (native ZIP writer for .docx/.odt) and re-exported here so
+ * callers have one import site:
  *
- *   • `.doc`  — an HTML file wrapped in the MS Office namespace. Word,
- *               LibreOffice, Google Docs and Pages all open it as a normal
- *               editable document (fonts, tables, colours, headings intact).
- *   • `.html` — clean, standalone HTML for the web.
- *   • `.md`   — Markdown, for version control and agent pipelines.
- *   • `.txt`  — plain text with no formatting.
- *   • PDF     — via the browser's own print-to-PDF pipeline.
+ *   • `.docx`  — real OOXML package (text, headings, bold/italic, lists, tables).
+ *   • `.doc`   — HTML file wrapped in the MS Office namespace.
+ *   • `.odt`   — OpenDocument text.
+ *   • `.rtf`   — Rich Text Format.
+ *   • `.tex`   — LaTeX for typesetting.
+ *   • `.html`  — clean, standalone HTML for the web.
+ *   • `.md`    — Markdown, for version control and agent pipelines.
+ *   • `.txt`   — plain text with no formatting.
+ *   • PDF      — via the browser's own print-to-PDF pipeline.
  *
- * Import accepts `.html`, `.md`, `.txt`, and `.doc`/`.docx` best-effort: a
- * `.doc` written by us is HTML and re-parses cleanly; a binary `.docx` loads
- * its text so nothing is lost silently.
+ * Import accepts `.html`, `.md`, `.txt`, `.rtf`, `.docx`/`.odt` (best-effort
+ * text extraction) and `.doc` written by us.
  */
 
-export type ExportFormat = 'doc' | 'html' | 'md' | 'txt';
+import { buildDocx, buildLatex, buildOdt, buildRtf, stripOfficeXmlMarkup } from './fileFormats';
+
+export type ExportFormat = 'docx' | 'doc' | 'odt' | 'rtf' | 'tex' | 'html' | 'md' | 'txt';
 
 const OFFICE_HEAD =
 	'<html xmlns:o="urn:schemas-microsoft-com:office:office" ' +
@@ -160,7 +164,7 @@ export function htmlToMarkdown(root: HTMLElement): string {
 	return lines.join('\n\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
 }
 
-/** Render HTML for a chosen export format. */
+/** Render HTML for a chosen text-based export format. */
 export function serialize(html: string, format: ExportFormat, title = 'Naskah'): string {
 	const clean = cleanHtml(html);
 	if (format === 'html') {
@@ -172,23 +176,47 @@ export function serialize(html: string, format: ExportFormat, title = 'Naskah'):
 	if (format === 'doc') {
 		return OFFICE_HEAD + clean + OFFICE_TAIL;
 	}
+	if (format === 'rtf') {
+		return buildRtf(clean);
+	}
+	if (format === 'tex') {
+		return buildLatex(clean, title);
+	}
 	if (format === 'md') {
 		const div = document.createElement('div');
 		div.innerHTML = clean;
 		return htmlToMarkdown(div);
 	}
-	// txt
+	// txt (docx/odt are binary and handled in downloadDocument)
 	const div = document.createElement('div');
 	div.innerHTML = clean;
 	return (div.innerText || '').trim() + '\n';
 }
 
 const MIME: Record<ExportFormat, string> = {
+	docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 	doc: 'application/msword',
+	odt: 'application/vnd.oasis.opendocument.text',
+	rtf: 'application/rtf',
+	tex: 'application/x-tex',
 	html: 'text/html',
 	md: 'text/markdown',
 	txt: 'text/plain',
 };
+
+/** Serialize to bytes or a string, depending on the format. */
+export function serializeToBlob(html: string, format: ExportFormat, title = 'Naskah'): Blob {
+	if (format === 'docx') return new Blob([toArrayBuffer(buildDocx(html))], { type: MIME.docx });
+	if (format === 'odt') return new Blob([toArrayBuffer(buildOdt(html))], { type: MIME.odt });
+	return new Blob([serialize(html, format, title)], { type: `${MIME[format]};charset=utf-8` });
+}
+
+/** Copy a Uint8Array into a plain ArrayBuffer Blob can always accept. */
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+	const copy = new Uint8Array(bytes.byteLength);
+	copy.set(bytes);
+	return copy.buffer;
+}
 
 /** Trigger a browser download of the serialized document. */
 export function downloadDocument(
@@ -197,9 +225,8 @@ export function downloadDocument(
 	filename: string,
 	title = 'Naskah'
 ): void {
-	const body = serialize(html, format, title);
+	const blob = serializeToBlob(html, format, title);
 	const name = filename.replace(/\.[^./]+$/, '') || 'naskah';
-	const blob = new Blob([body], { type: `${MIME[format]};charset=utf-8` });
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = url;
@@ -208,7 +235,7 @@ export function downloadDocument(
 	document.body.appendChild(a);
 	a.click();
 	document.body.removeChild(a);
-	URL.revokeObjectURL(url);
+	setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 /** Open the print dialog (browser → "Save as PDF"). */
@@ -216,16 +243,21 @@ export function printDocument(): void {
 	window.print();
 }
 
-/** Best-effort import of a text-based document into an HTML string. */
+/** Best-effort import of a document into an HTML string. */
 export async function readImportedFile(file: File): Promise<string> {
 	const name = file.name.toLowerCase();
+	if (name.endsWith('.docx') || name.endsWith('.odt')) {
+		const text = await file.text();
+		return stripOfficeXmlMarkup(text) || text;
+	}
 	const text = await file.text();
+	if (name.endsWith('.rtf')) {
+		return rtfToHtml(text);
+	}
 	if (name.endsWith('.md')) {
-		// Minimal Markdown → HTML (headings, bold, italic, lists, paragraphs).
 		return markdownToHtml(text);
 	}
 	if (name.endsWith('.html') || name.endsWith('.htm') || name.endsWith('.doc')) {
-		// Extract <body> content from a saved doc/html if present.
 		const bodyMatch = text.match(/<body[^>]*>([\s\S]*)<\/body>/i);
 		return bodyMatch ? bodyMatch[1] : text;
 	}
@@ -233,6 +265,23 @@ export async function readImportedFile(file: File): Promise<string> {
 	return text
 		.split(/\n{2,}/)
 		.map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br/>')}</p>`)
+		.join('');
+}
+
+/** Very small RTF → HTML converter (paragraphs and runs only). */
+function rtfToHtml(rtf: string): string {
+	const paragraphs = rtf.split(/\\par[d]?/);
+	return paragraphs
+		.map((p) => {
+			const text = p
+				.replace(/\{\\\*[^}]*\}/g, '')
+				.replace(/\\'[0-9a-f]{2}/g, '')
+				.replace(/\\u(-?\d+)\??/g, (_m, n) => String.fromCharCode(Number(n) < 0 ? Number(n) + 65536 : Number(n)))
+				.replace(/\\[a-z]+-?\d* ?/g, '')
+				.replace(/[{}]/g, '')
+				.trim();
+			return text ? `<p>${escapeHtml(text)}</p>` : '';
+		})
 		.join('');
 }
 
