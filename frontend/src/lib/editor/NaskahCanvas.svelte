@@ -27,11 +27,13 @@
   interface Props {
     html: string;
     zoom?: number;
+    /** Reading mode: drop the paper chrome and present a clean, wide column. */
+    reading?: boolean;
     setup?: Partial<PageSetup>;
     onchange?: (html: string, stats: TextStats) => void;
   }
 
-  let { html, zoom = 100, setup = {}, onchange }: Props = $props();
+  let { html, zoom = 100, reading = false, setup = {}, onchange }: Props = $props();
 
   let editorEl = $state<HTMLElement>();
   let lastSyncedHtml = '';
@@ -115,16 +117,18 @@
   }
 </script>
 
-<div class="naskah-stage overflow-auto bg-[var(--bg-primary)]">
+<div class="naskah-stage overflow-auto bg-[var(--bg-primary)]" class:reading>
   <div class="naskah-stage-inner">
     <div
       class="naskah-paper"
       style:width="{page.width * (zoom / 100)}px"
-      style:min-height="{page.minHeight * (zoom / 100)}px"
-      style:padding="{page.marginY * (zoom / 100)}px {page.marginX * (zoom / 100)}px"
+      style:min-height="{reading ? 0 : page.minHeight * (zoom / 100)}px"
+      style:padding={reading
+        ? '2.5rem 1.5rem'
+        : `${page.marginY * (zoom / 100)}px ${page.marginX * (zoom / 100)}px`}
       style:font-family={page.fontFamily}
-      style:font-size="{page.fontSize * (zoom / 100)}pt"
-      style:line-height={page.lineHeight}
+      style:font-size={reading ? `${Math.max(13, page.fontSize)}pt` : `${page.fontSize * (zoom / 100)}pt`}
+      style:line-height={reading ? 1.75 : page.lineHeight}
     >
       <!-- eslint-disable-next-line svelte/no-at-html-tags -->
       <div
@@ -182,6 +186,20 @@
   }
   .naskah-content:focus {
     outline: none;
+  }
+  /* Reading mode: a wide, shadowless column centred for comfortable reading —
+     the page-break markers are hidden because pagination is irrelevant here. */
+  .naskah-stage.reading .naskah-stage-inner {
+    padding: 1.5rem 1rem;
+  }
+  .naskah-stage.reading .naskah-paper {
+    width: min(760px, calc(100vw - 2rem)) !important;
+    max-width: 760px;
+    box-shadow: none;
+    background: transparent;
+  }
+  .naskah-stage.reading :global(.naskah-pagebreak) {
+    display: none;
   }
   /* Global content styles for anything inserted or typed inside the paper. */
   .naskah-content :global(h1) {

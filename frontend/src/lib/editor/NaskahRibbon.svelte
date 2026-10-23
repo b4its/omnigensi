@@ -246,7 +246,8 @@
 <svelte:window onmousedown={closePopovers} />
 
 <div class="naskah-ribbon sticky top-0 z-20 border-b border-[var(--border-color)] bg-[var(--bg-surface)]">
-  <!-- Tab strip + quick actions -->
+  <!-- Tab strip + quick actions (hidden in reading mode) -->
+  {#if !readingMode}
   <div class="flex items-center gap-0.5 px-2 pt-1.5 border-b border-[var(--border-color)]/50 overflow-x-auto">
     {#each tabs as tab}
       <button
@@ -265,8 +266,26 @@
       </button>
     {/each}
   </div>
+  {/if}
 
-  <!-- Ribbon body -->
+  <!-- Ribbon body (hidden in reading mode; a slim exit bar replaces it) -->
+  {#if readingMode}
+    <div class="flex items-center justify-between gap-2 px-3 py-1.5">
+      <span class="text-[10px] font-code text-[var(--text-muted)]">
+        MODE BACA · bilah alat disembunyikan
+      </span>
+      <button
+        type="button"
+        onmousedown={(e) => {
+          e.preventDefault();
+          ontogglereading();
+        }}
+        class="px-3 py-1 text-[10px] font-hud border border-[var(--accent-primary)] text-[var(--accent-primary)] chamfer-sm hover:bg-[var(--accent-primary)]/10"
+      >
+        KELUAR MODE BACA
+      </button>
+    </div>
+  {:else}
   <div class="flex items-stretch gap-0 min-h-[74px] overflow-x-auto py-1">
     {#if activeTab === 'Home'}
       <RibbonGroup label="Clipboard">
@@ -663,6 +682,7 @@
       </RibbonGroup>
     {/if}
   </div>
+  {/if}
 
   <!-- Quick-access file bar -->
   <div class="flex items-center gap-1 px-2 py-1 border-t border-[var(--border-color)]/40 bg-[var(--bg-elevated)]/30 overflow-x-auto">

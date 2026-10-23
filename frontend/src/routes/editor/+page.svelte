@@ -323,6 +323,7 @@
       bind:this={canvas}
       {html}
       {zoom}
+      reading={readingMode}
       setup={{
         width: pageWidth,
         marginY,
