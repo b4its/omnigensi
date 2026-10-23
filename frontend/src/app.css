@@ -350,3 +350,71 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+ * Naskah Studio — print / "Save as PDF" output.
+ *
+ * When the operator prints the manuscript, only the paper content should hit
+ * the page: hide the app chrome (header, sidebar, ribbon, status bar) and let
+ * the editor canvas expand to the printed page. The `.naskah-paper` element is
+ * the only thing we keep, forced to full width with ink-on-white colours.
+ */
+@media print {
+  @page {
+    size: A4;
+    margin: 2.54cm;
+  }
+
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  /* Hide every direct child of the app shell except the passed-through route. */
+  header,
+  aside,
+  .naskah-ribbon {
+    display: none !important;
+  }
+
+  /* Undo the layout's height/padding constraints for printing. */
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    max-width: none !important;
+  }
+
+  .naskah-paper {
+    width: auto !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    color: #000 !important;
+    font-size: 12pt !important;
+    line-height: 1.5 !important;
+  }
+
+  .naskah-content {
+    color: #000 !important;
+  }
+
+  .naskah-content :where(h1, h2, h3, h4, h5, h6, p, li, td, th, strong, a) {
+    color: #000 !important;
+  }
+
+  .naskah-content :where(.naskah-pagebreak) {
+    page-break-after: always;
+    border: 0 !important;
+  }
+
+  .naskah-content :where(.naskah-pagebreak)::after {
+    content: '' !important;
+  }
+
+  /* Don't print the bottom status bar (it lives outside .naskah-paper). */
+  .naskah-status {
+    display: none !important;
+  }
+}
