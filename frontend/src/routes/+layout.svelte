@@ -28,6 +28,7 @@
     FolderOpen,
     MessageSquare,
     Cable,
+    FileText,
   } from 'lucide-svelte';
 
   let { children } = $props();
@@ -46,9 +47,13 @@
     { name: '[08] SETTINGS', href: '/settings', icon: Settings },
     { name: '[09] AI CHAT', href: '/chat', icon: MessageSquare },
     { name: '[10] INTEGRATIONS', href: '/integrations', icon: Cable },
+    { name: '[11] NASKAH STUDIO', href: '/editor', icon: FileText },
   ];
 
   const isLoginRoute = $derived(page.url.pathname.startsWith('/login'));
+  // The document editor needs the full stage: no max-width clamp and no page
+  // padding, otherwise the ribbon and the paper canvas feel cramped.
+  const isEditorRoute = $derived(page.url.pathname.startsWith('/editor'));
 
   onMount(async () => {
     if (auth.authenticated === null) await auth.check();
@@ -283,7 +288,7 @@
     {/if}
 
     <!-- Main Content Stage -->
-    <main class="flex-1 p-4 md:p-6 overflow-y-auto max-w-7xl mx-auto w-full">
+    <main class="flex-1 overflow-y-auto w-full {isEditorRoute ? '' : 'p-4 md:p-6 max-w-7xl mx-auto'}">
       {#if isLoginRoute || auth.authenticated}
         {@render children()}
       {:else}
