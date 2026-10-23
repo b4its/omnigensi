@@ -74,7 +74,7 @@
     textFrame,
   } from '$lib/editor/loBlocks';
   import type { FieldKind } from '$lib/editor/loBlocks';
-  import { breakMarkup, pageFieldMarkup } from '$lib/editor/loLayout';
+  import { breakMarkup, pageFieldMarkup, writerStatus } from '$lib/editor/loLayout';
   import type { NumberingContext } from '$lib/editor/loLayout';
   import { linkMarkup, validateLink } from '$lib/editor/loLinks';
   import type { Recipients, LayoutName } from '$lib/editor/mailings';
@@ -840,6 +840,11 @@
     return el ? collectHeadings(el).map((h) => ({ id: h.id, text: h.text, level: h.level })) : [];
   });
   const pageLabel = $derived(`${section.paper}${section.orientation === 'landscape' ? ' ↔' : ''}`);
+  const totalPages = $derived.by(() => {
+    void navRevision;
+    return canvas?.pageCount() ?? 1;
+  });
+  const writerBar = $derived(writerStatus(1, totalPages, stats.words));
 </script>
 
 <svelte:window onkeydown={onKeydown} onselectionchange={onSelectionChange} />
@@ -1035,6 +1040,8 @@
           {pageView}
           ruler={showRuler}
           {showMarks}
+          showCommentMargins={reviewOpen && reviewTab === 'comments'}
+          oncommentclick={(id) => { const el = getEditor(); if (el) review.focusComment(el, id); }}
           onchange={onChange}
         />
       </div>
@@ -1071,6 +1078,9 @@
         {/if}
       </div>
       <div class="flex items-center gap-3 whitespace-nowrap">
+        <span title="LibreOffice-style page counter">{writerBar.pages}</span>
+        <span class="text-[var(--accent-primary)]" title="Mode penyisipan (LibreOffice)">{writerBar.mode}</span>
+        <span class="hidden sm:inline">{writerBar.language}</span>
         <span>{pageLabel} · {section.margins.top}px · {zoom}%</span>
         {#if deviceBridge.directoryHandle}
           <span class="text-[var(--status-success)]">DISK: {deviceBridge.mountedFolderName}</span>

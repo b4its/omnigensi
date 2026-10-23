@@ -29,7 +29,11 @@
     ruler?: boolean;
     /** Show the non-printing formatting marks. */
     showMarks?: boolean;
+    /** Draw Word/Writer margin comment balloons beside the text. */
+    showCommentMargins?: boolean;
     onchange?: (html: string, stats: TextStats) => void;
+    /** Click on a margin balloon. */
+    oncommentclick?: (id: string) => void;
   }
 
   let {
@@ -40,13 +44,48 @@
     pageView = 1,
     ruler = false,
     showMarks = false,
+    showCommentMargins = false,
     onchange,
+    oncommentclick,
   }: Props = $props();
 
   let editorEl = $state<HTMLElement>();
   let lastSyncedHtml = '';
 
   const dims = $derived(pageDimensions(section));
+
+  // Margin notes: recomputed whenever the document text changes.
+  let notes = $state<{ id: string; text: string; author: string; top: number; color: string }[]>([]);
+  const COMMENT_COLORS = ['#0066FF', '#FF0055', '#00A86B', '#B8860B', '#7C4DFF'];
+
+  function recomputeNotes() {
+    if (!editorEl || !showCommentMargins) {
+      notes = [];
+      return;
+    }
+    const anchors = Array.from(editorEl.querySelectorAll<HTMLElement>('[data-comment]'));
+    notes = anchors.map((el, i) => {
+      const paperTop = editorEl!.getBoundingClientRect().top;
+      return {
+        id: el.getAttribute('data-comment') ?? String(i),
+        text: el.getAttribute('data-comment-text') ?? '',
+        author: el.getAttribute('data-author') ?? 'Penulis',
+        top: el.getBoundingClientRect().top - paperTop,
+        color: COMMENT_COLORS[i % COMMENT_COLORS.length],
+      };
+    });
+  }
+
+  $effect(() => {
+    if (showCommentMargins) {
+      // Reading `html` makes this recompute after every edit.
+      void html;
+      void section;
+      requestAnimationFrame(recomputeNotes);
+    } else {
+      notes = [];
+    }
+  });
 
   export function focus() {
     if (!editorEl) return;
@@ -177,6 +216,24 @@
           {@html footerMarkup(section)}
         </div>
       {/if}
+
+      {#if showCommentMargins && notes.length > 0}
+        <div class="naskah-margin-balloons" contenteditable="false" aria-hidden="true">
+          {#each notes as n (n.id)}
+            <button
+              type="button"
+              class="naskah-balloon"
+              style:top="{n.top}px"
+              style:border-left-color={n.color}
+              title="{n.author}: {n.text}"
+              onclick={() => oncommentclick?.(n.id)}
+            >
+              <span class="balloon-author">{n.author}</span>
+              <span class="balloon-text">{n.text}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
     </div>
   </div>
 </div>
@@ -267,6 +324,58 @@
     margin-left: 2px;
   }
   /* Header / footer bands sit in the page margins. */
+  /* Writer/Word margin comment balloons: a narrow column to the right of the
+     paper. Absolute so they scroll with the page and never affect layout. */
+  .naskah-margin-balloons {
+    position: absolute;
+    top: 0;
+    left: 100%;
+    width: 190px;
+    margin-left: 12px;
+    height: 100%;
+    pointer-events: none;
+  }
+  .naskah-balloon {
+    position: absolute;
+    left: 0;
+    width: 190px;
+    pointer-events: auto;
+    text-align: left;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-left-width: 3px;
+    border-radius: 3px;
+    padding: 4px 6px;
+    font-size: 10px;
+    line-height: 1.3;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+  }
+  .naskah-balloon:hover {
+    border-color: var(--accent-primary);
+  }
+  .balloon-author {
+    display: block;
+    font-size: 8px;
+    letter-spacing: 0.05em;
+    color: var(--accent-primary);
+    text-transform: uppercase;
+    margin-bottom: 1px;
+  }
+  .balloon-text {
+    display: block;
+    color: var(--text-primary);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+  }
+  /* Highlighted comment spans inside the text. */
+  .naskah-content :global([data-comment]) {
+    background: rgba(255, 235, 59, 0.18);
+    border-bottom: 1px dotted currentColor;
+  }
   .naskah-hf {
     position: absolute;
     left: 0;
