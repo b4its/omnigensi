@@ -96,16 +96,51 @@ Makefile            all operational commands
 
 ---
 
+## Naskah Studio (document editor)
+
+`/editor` is a full word processor modelled on Microsoft Word (feature parity
+with [Wordcraft](https://github.com/storytold/wordcraft)) plus the parts of
+LibreOffice Writer those tools do not cover.
+
+| Area | What it does |
+|---|---|
+| Ribbon | File · Home · **Format** · Insert · Design · Layout · References · Mailings · Review · View, plus contextual **Table** and **Picture** tabs |
+| File | New from 5 templates, open, save, export `.docx` `.doc` `.odt` `.rtf` `.tex` `.html` `.md` `.txt`, print/PDF, document properties, crash recovery, version history |
+| Home | Clipboard, Format Painter, font family/size, bold/italic/underline (incl. double), strike, sub/superscript, small caps, all caps, hidden, highlight, colour, text effects (outline/shadow/glow/emboss), character spacing/scale/position, enclosed characters, change case, clear formatting |
+| Paragraph | Alignment (incl. distributed), RTL, bullets/numbering/multilevel, list styles, indent/outdent, hanging indent, line spacing, spacing before/after, keep-with-next, keep-lines, widow control, page-break-before, sort, move up/down |
+| Styles | Live gallery of Word and Writer styles, custom styles created from the caret, floating styles pane |
+| Insert | Cover pages, blank page, page/column/section breaks, tables (grid + quick tables + text↔table), pictures, shapes, icons, SmartArt, charts, links with named targets, bookmarks, cross-references, text boxes, WordArt, drop caps, signature lines, date/time, quick parts, symbols, equations |
+| Format (Writer) | **AutoText** library, insertable fields, in-text page numbers, text frames with anchor/wrap, Fontwork, list gallery, horizontal-line gallery, column presets |
+| Design | Themes, paragraph-spacing presets, watermark, page colour, page borders, dark paper |
+| Layout | Page setup (paper, orientation, margins, gutter, columns, vertical alignment), line numbers, hyphenation, paragraph and arrange controls |
+| References | Table of contents from live headings, table of figures, index, footnotes/endnotes with renumbering, citations (APA/MLA/Chicago/IEEE) and bibliography, captions |
+| Mailings | CSV recipient list, merge fields, address block, greeting line, IF rules, record preview, merge, envelopes and labels |
+| Review | Comments with **margin balloons**, track changes (accept/reject one or all), Indonesian spelling pass, thesaurus, read-aloud, accessibility inspector, word count |
+| View | Read mode, navigation pane, ruler, formatting marks, single/two-page, full screen, dark mode, zoom |
+| Table / Picture | Merge/split cells, repeat header, banded rows, shading, borders, distribute, auto-fit, sort, SUM/AVERAGE/COUNT/MAX/MIN formulas, table→text; resize, rotate, crop, alt text, text wrapping |
+| Everywhere | Tell-Me command search (`Alt+Q`), keyboard shortcuts (`Ctrl+S/F/P/K/G`, `Ctrl+B/I/U`), autosave, crash recovery, Indonesian UI and formatters |
+
+The document engine lives in `frontend/src/lib/editor/`: `commands`/`charFx`/
+`paraFx` (formatting), `styles`, `insertBlocks`/`loBlocks` (building blocks),
+`references`, `review`, `mailings`, `tableTools`, `pageSetup`/`loLayout`,
+`fileFormats`/`export` (native `.docx`/`.odt` ZIP writers) and
+`persistence` (autosave/versions). Units are covered by the Vitest suite.
+
+---
+
 ## Testing
 
 ```bash
-make test        # full pytest suite inside the container
-make check       # svelte-check type diagnostics
-make lint        # compose validation + Python syntax check
+make test           # full pytest suite inside the container
+make test-frontend  # Vitest unit tests for the editor libraries
+make check          # svelte-check type diagnostics
+make lint           # compose validation + Python syntax check
 ```
 
 Coverage includes API contracts, pagination, the uniform error envelope, CORS
-policy, file-download security and full end-to-end workflow execution.
+policy, file-download security and full end-to-end workflow execution; the
+editor suite covers the formatting, reference, review, mail-merge, table and
+file-format libraries plus the plain-text engine.
 
 ---
 
