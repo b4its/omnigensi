@@ -197,6 +197,8 @@
       const filename = `${safeName(docTitle)}.html`;
       const base64 = toBase64(wrapHtmlDocument(body));
       const res = await deviceBridge.saveAgentFileToDevice(filename, base64, 'text/html', undefined);
+      // The local autosave copy is the source of truth even when the device
+      // bridge declines to write (no folder mounted / mobile browser).
       saveDraftNow();
       versions = listVersions();
       if (res.success) notify.success(`Tersimpan: ${filename} (${res.mode})`);

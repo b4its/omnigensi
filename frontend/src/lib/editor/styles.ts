@@ -139,6 +139,98 @@ export const BUILTIN_STYLES: DocStyle[] = [
 ];
 
 /**
+ * LibreOffice Writer's own paragraph styles, grouped the way the Styles deck
+ * groups them. Kept separate from the Word-named gallery so an operator trained
+ * on Writer (Text Body, Salutation, Abstract, Endnote…) finds familiar names.
+ */
+export const WRITER_STYLES: DocStyle[] = [
+	{ name: 'Text Body', tag: 'p', preview: 'Teks isi', paragraph: true, css: { 'line-height': '1.5', 'margin-bottom': '6pt' } },
+	{ name: 'First Paragraph', tag: 'p', preview: 'Paragraf pembuka', paragraph: true, css: { 'margin-bottom': '6pt' } },
+	{ name: 'Text Body Indent', tag: 'p', preview: 'Isi menjorok', paragraph: true, css: { 'margin-left': '24px' } },
+	{
+		name: 'Block Quotation',
+		tag: 'blockquote',
+		preview: 'Kutipan blok',
+		paragraph: true,
+		css: { margin: '1em 2.5em', 'font-style': 'italic', color: '#444' },
+	},
+	{ name: 'Salutation', tag: 'p', preview: 'Dengan hormat,', paragraph: true, css: { 'margin-top': '12pt' } },
+	{ name: 'Complimentary Close', tag: 'p', preview: 'Hormat saya,', paragraph: true, css: { 'margin-top': '18pt' } },
+	{
+		name: 'Abstract',
+		tag: 'p',
+		preview: 'Abstrak',
+		paragraph: true,
+		css: { 'font-size': '10pt', 'margin-left': '24px', 'margin-right': '24px', 'text-align': 'justify' },
+	},
+	{
+		name: 'Abstract Heading',
+		tag: 'h2',
+		preview: 'ABSTRAK',
+		paragraph: true,
+		css: { 'font-size': '12pt', 'text-transform': 'uppercase', 'text-align': 'center' },
+	},
+	{
+		name: 'Sender',
+		tag: 'p',
+		preview: 'Pengirim',
+		paragraph: true,
+		css: { 'font-size': '9pt', color: '#666', 'margin-bottom': '18pt' },
+	},
+	{
+		name: 'Signature',
+		tag: 'p',
+		preview: 'Tanda tangan',
+		paragraph: true,
+		css: { 'margin-top': '36pt', 'text-align': 'right' },
+	},
+	{
+		name: 'Addressee',
+		tag: 'p',
+		preview: 'Kepada Yth.',
+		paragraph: true,
+		css: { 'margin-bottom': '12pt' },
+	},
+	{
+		name: 'Heading (Writer)',
+		tag: 'h2',
+		preview: 'Journal Heading',
+		paragraph: true,
+		css: { 'font-size': '14pt', 'font-weight': '700', 'margin-top': '12pt' },
+	},
+	{
+		name: 'Heading 10',
+		tag: 'h4',
+		preview: 'Journal Subtitle',
+		paragraph: true,
+		css: { 'font-size': '11pt', 'font-style': 'italic', 'font-weight': '400' },
+	},
+	{
+		name: 'Contents 1',
+		tag: 'p',
+		preview: 'Daftar Isi 1',
+		paragraph: true,
+		css: { 'margin-left': '0', 'font-weight': '600' },
+	},
+	{
+		name: 'Contents 2',
+		tag: 'p',
+		preview: 'Daftar Isi 2',
+		paragraph: true,
+		css: { 'margin-left': '1.5em' },
+	},
+	{ name: 'Endnote', tag: 'p', preview: 'Catatan akhir', paragraph: true, css: { 'font-size': '9pt' } },
+	{ name: 'List', tag: 'p', preview: 'Butir daftar', paragraph: true, css: { 'margin-left': '24px' } },
+	{ name: 'Internet Link', preview: 'tautan', css: { color: '#0066FF', 'text-decoration': 'underline' }, paragraph: false },
+	{ name: 'Visited Internet Link', preview: 'tautan dikunjungi', css: { color: '#7C4DFF', 'text-decoration': 'underline' }, paragraph: false },
+];
+
+/** Every style the editor knows, whichever family it came from. */
+export function allStyles(custom: DocStyle[] = []): DocStyle[] {
+	return [...BUILTIN_STYLES, ...WRITER_STYLES, ...custom];
+}
+
+/**
  * Apply a paragraph style to every selected block. Character-only styles are
  * applied inline to the current selection instead of replacing the block tag.
  */
