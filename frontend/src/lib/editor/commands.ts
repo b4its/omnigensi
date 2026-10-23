@@ -178,7 +178,43 @@ export function selectedBlocks(): HTMLElement[] {
 
 // ── Insertions ─────────────────────────────────────────────────────────────
 export const insert = {
-	html: (html: string) => exec('insertHTML', html),
+	/**
+	 * Insert an HTML block at the caret.
+	 *
+	 * `execCommand('insertHTML')` pastes *inline* when the caret sits inside a
+	 * paragraph, which nested headings and tables inside a `<p>` (invalid
+	 * markup, and visually broken). When the payload starts with a block
+	 * element we split the paragraph first: insert a break at the caret, then
+	 * the block, then leave the caret on a fresh paragraph after it.
+	 */
+	html: (html: string) => {
+		const startsBlock = startsWithBlock(html);
+		if (!startsBlock) return exec('insertHTML', html);
+
+		const sel = window.getSelection();
+		const inParagraph = (() => {
+			let node: Node | null = sel?.anchorNode ?? null;
+			while (node && node !== document.body) {
+				if (node.nodeType === Node.ELEMENT_NODE) {
+					const tag = (node as Element).tagName;
+					if (tag === 'P' || tag === 'DIV' || /^H[1-6]$/.test(tag) || tag === 'LI') return true;
+				}
+				node = node.parentNode;
+			}
+			return false;
+		})();
+
+		if (inParagraph) {
+			// Finish the current block, drop in the payload, then open a new
+			// paragraph so the writer keeps typing on a clean line.
+			exec('insertParagraph');
+		}
+		exec('insertHTML', html);
+		if (inParagraph) exec('insertParagraph');
+		exec('insertHTML', '<br/>');
+	},
+	/** Raw HTML without block splitting (inline spans, links, images). */
+	inlineHtml: (html: string) => exec('insertHTML', html),
 	text: (text: string) => exec('insertText', text),
 	link: (href: string, label?: string) => {
 		const sel = window.getSelection();
@@ -186,7 +222,7 @@ export const insert = {
 		if (hasText) {
 			exec('createLink', href);
 		} else {
-			insert.html(
+			insert.inlineHtml(
 				`<a href="${escapeAttr(href)}" target="_blank" rel="noopener">${escapeHtml(
 					label || href
 				)}</a>`
@@ -195,7 +231,7 @@ export const insert = {
 	},
 	image: (src: string, alt = '', width?: number) => {
 		const w = width ? ` width="${width}"` : '';
-		insert.html(`<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}"${w} />`);
+		insert.inlineHtml(`<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}"${w} />`);
 	},
 	/** A table with the given dimensions, header row enabled. */
 	table: (rows: number, cols: number, header = true) => {
@@ -452,6 +488,15 @@ export function textStats(root: HTMLElement): TextStats {
 }
 
 // ── Small helpers ──────────────────────────────────────────────────────────
+/**
+ * True when an HTML payload starts with a block-level element and therefore
+ * must be inserted on its own block rather than inline inside a paragraph.
+ * Exported for the insert tests.
+ */
+export function startsWithBlock(html: string): boolean {
+	return /^\s*<(p|div|h[1-6]|ul|ol|table|blockquote|pre|hr|dl|figure)\b/i.test(html);
+}
+
 function escapeHtml(s: string): string {
 	return s.replace(/[&<>"']/g, (c) =>
 		({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string

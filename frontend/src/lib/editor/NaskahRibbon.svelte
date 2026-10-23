@@ -330,8 +330,21 @@
     { name: 'View', icon: Eye },
   ];
 
-  let activeTab = $state<Tab>('Home');
-  const shownTab = $derived(inPicture ? 'Picture' : inTable ? 'Table' : activeTab);
+  // Word shows Table/Picture as *extra* contextual tabs and keeps the one the
+  // user picked. Only auto-switch to a contextual tab when the caret enters a
+  // table or picture while a non-contextual tab is active — never overwrite an
+  // explicit choice, or the contextual tools become unreachable.
+  let shownTab = $state<Tab>('Home');
+  $effect(() => {
+    if (inTable && (shownTab === 'Home' || shownTab === 'Insert') && !tableDismissed) {
+      shownTab = 'Table';
+    }
+    if (inPicture && !pictureDismissed) {
+      shownTab = 'Picture';
+    }
+  });
+  let tableDismissed = $state(false);
+  let pictureDismissed = $state(false);
 
   // Popover visibility, all closed on outside mousedown like Word's menus.
   let popover = $state<string | null>(null);
@@ -403,7 +416,9 @@
           type="button"
           onmousedown={(e) => {
             e.preventDefault();
-            activeTab = tab.name;
+            shownTab = tab.name;
+            if (tab.name !== 'Table') tableDismissed = true;
+            if (tab.name !== 'Picture') pictureDismissed = true;
             popover = null;
           }}
           class="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-hud tracking-wider rounded-t-sm whitespace-nowrap transition-colors

@@ -390,7 +390,7 @@
         dialog = null;
         break;
       case 'crossref':
-        insert.html(`<a href="#${payload.target}" style="color:inherit;text-decoration:underline dotted">${payload.label}</a>`);
+        insert.inlineHtml(`<a href="#${payload.target}" style="color:inherit;text-decoration:underline dotted">${payload.label}</a>`);
         dialog = null;
         break;
       case 'comment': {
