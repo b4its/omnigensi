@@ -1,131 +1,206 @@
 <script lang="ts">
   /**
-   * NASKAH STUDIO — a Word-like manuscript editor.
+   * NASKAH STUDIO — a Word/Wordcraft-like manuscript editor.
    *
-   * A dedicated, full-stage page (the layout drops its max-width clamp for
-   * `/editor`). Composes:
-   *   • NaskahRibbon — tabbed ribbon with Word-style tool groups,
-   *   • NaskahCanvas — the A4 paper with live zoom and page setup,
-   *   • dialogs for Find & Replace, Insert Link and Insert Image,
+   * A dedicated, full-stage page. Composes:
+   *   • NaskahRibbon — tabbed ribbon (Home → View, plus Table and Picture),
+   *   • NaskahCanvas — the A4 paper with page setup, watermarks and headers,
+   *   • side panes for navigation, styles and review,
+   *   • the File backstage, the Tell-Me command search and ~25 dialogs,
    *   • a status bar with live word/character/page counts,
-   *   • autosave to localStorage and save/export via the editor libs.
+   *   • autosave, crash recovery and a version history.
    *
-   * The rich-text commands live in `$lib/editor/commands.ts`; export/import in
-   * `$lib/editor/export.ts`. This file only coordinates state between them.
+   * The heavy lifting lives in `$lib/editor/*` (formatting, references, review,
+   * mail merge, file formats, persistence); this file only coordinates state.
    */
   import { onMount } from 'svelte';
   import NaskahRibbon from '$lib/editor/NaskahRibbon.svelte';
   import NaskahCanvas from '$lib/editor/NaskahCanvas.svelte';
-  import { textStats, replaceAll, insert, findNext, countMatches, selectionStats } from '$lib/editor/commands';
-  import type { TextStats } from '$lib/editor/commands';
+  import StyleGallery from '$lib/editor/StyleGallery.svelte';
+  import StyleGalleryPane from '$lib/editor/StylesPane.svelte';
+  import FileBackstage from '$lib/editor/FileBackstage.svelte';
+  import NavigationPane from '$lib/editor/NavigationPane.svelte';
+  import ReviewPane from '$lib/editor/ReviewPane.svelte';
+  import type { ReviewTab } from '$lib/editor/ReviewPane.svelte';
+  import MailingsPane from '$lib/editor/MailingsPane.svelte';
+  import CommandSearch from '$lib/editor/CommandSearch.svelte';
+  import EditorDialogs from '$lib/editor/EditorDialogs.svelte';
+  import type { DialogKind } from '$lib/editor/EditorDialogs.svelte';
+
+  import { textStats, replaceAll, insert, findNext, countMatches, selectionStats, currentBlock, para } from '$lib/editor/commands';
+  import type { TextStats, Align } from '$lib/editor/commands';
+  import { charFx, applyFontDialog } from '$lib/editor/charFx';
+  import { paraFx, textToTable } from '$lib/editor/paraFx';
+  import { tableTools, pictureTools } from '$lib/editor/tableTools';
+  import { applyStyle } from '$lib/editor/styles';
+  import type { DocStyle } from '$lib/editor/styles';
+  import { readState, emptyState } from '$lib/editor/editorState';
+  import type { EditorStateSnapshot } from '$lib/editor/editorState';
+  import { collectHeadings } from '$lib/editor/headings';
+  import { renderToc } from '$lib/editor/headings';
+  import {
+    defaultSection,
+    loadSection,
+    MARGIN_PRESETS,
+    saveSection,
+    spacingMultiplier,
+  } from '$lib/editor/pageSetup';
+  import type { SectionSetup } from '$lib/editor/pageSetup';
+  import {
+    captionMarkup,
+    ensureNotesList,
+    noteMarkup,
+    renumberCaptions,
+    renumberNotes,
+    bibliographyMarkup,
+    formatSource,
+    insertCitation,
+    loadSources,
+    saveSources,
+    tableOfFigures,
+  } from '$lib/editor/references';
+  import type { Source, CitationStyle } from '$lib/editor/references';
+  import * as review from '$lib/editor/review';
+  import type { Comment, InspectionFinding } from '$lib/editor/review';
+  import { parseCsv, mergePlaceholder, mergeAll, labelSheet } from '$lib/editor/mailings';
+  import type { Recipients, LayoutName } from '$lib/editor/mailings';
   import { downloadDocument, printDocument, readImportedFile } from '$lib/editor/export';
   import type { ExportFormat } from '$lib/editor/export';
+  import { TEMPLATES } from '$lib/editor/fileFormats';
+  import type { Template } from '$lib/editor/fileFormats';
+  import {
+    loadDraft,
+    saveDraft,
+    stashRecovery,
+    listRecovery,
+    listVersions,
+    pushVersion,
+    loadProperties,
+    saveProperties,
+    DEFAULT_PROPERTIES,
+  } from '$lib/editor/persistence';
+  import type { DocProperties, Version, Draft } from '$lib/editor/persistence';
+  import { coverPage, quickTable, textBox, wordArt, signatureLine, dropCap, chart as chartBlock, smartArt, equation, shape } from '$lib/editor/insertBlocks';
+  import { dateTimeStamp, formatNumber } from '$lib/editor/dates';
+  import { commandRegistry } from '$lib/editor/commandRegistry';
+  import type { Command } from '$lib/editor/commandRegistry';
   import { notify } from '$lib/stores/notify.svelte';
   import { deviceBridge } from '$lib/stores/deviceBridge.svelte';
-  import { X, FileText, Save, Check } from 'lucide-svelte';
-
-  const STORAGE_KEY = 'omnigensi.naskah.draft.v1';
-  const STORAGE_TITLE = 'omnigensi.naskah.title.v1';
+  import { FileText, Save, Check, ChevronLeft as ChevLeft } from 'lucide-svelte';
 
   const DEFAULT_HTML =
     '<h1>Naskah Baru</h1>' +
     '<p>Mulai menulis di sini. Gunakan bilah pita di atas untuk memformat teks, ' +
-    'menyisipkan tabel, gambar, tautan, dan lainnya — seperti di Microsoft Word.</p>' +
+    'menyisipkan tabel, gambar, tautan, daftar isi, catatan kaki, sitasi dan lainnya ' +
+    '— seperti di Microsoft Word.</p>' +
     '<p><br/></p>';
 
   let canvas = $state<NaskahCanvas>();
-  let ribbon = $state<NaskahRibbon>();
   let html = $state(DEFAULT_HTML);
   let docTitle = $state('Naskah Tanpa Judul');
+  let properties = $state<DocProperties>({ ...DEFAULT_PROPERTIES });
+  let section = $state<SectionSetup>(defaultSection());
   let zoom = $state(100);
-  let pageWidth = $state(794);
-  let marginY = $state(96);
   let readingMode = $state(false);
-  let darkPaper = $state(false);
-  let stats = $state<TextStats>({
-    words: 0,
-    characters: 0,
-    charactersNoSpaces: 0,
-    paragraphs: 0,
-    sentences: 0,
-    readingMinutes: 0,
-  });
+  let pageView = $state<1 | 2>(1);
+  let showRuler = $state(true);
+  let showMarks = $state(false);
+  let showNavPane = $state(false);
+  let showStylesPane = $state(false);
+  let showFileBackstage = $state(false);
+  let showCommandSearch = $state(false);
+  let showMailings = $state(false);
+  let reviewOpen = $state(false);
+  let reviewTab = $state<ReviewTab>('comments');
+  let navRevision = $state(0);
   let lastSaved = $state<string | null>(null);
-  let selStats = $state<{ words: number; characters: number }>({ words: 0, characters: 0 });
   let dirty = $state(false);
   let saving = $state(false);
+  let trackingOn = $state(false);
+
+  let editorState = $state<EditorStateSnapshot>(emptyState());
+  let stats = $state<TextStats>({ words: 0, characters: 0, charactersNoSpaces: 0, paragraphs: 0, sentences: 0, readingMinutes: 0 });
+  let selStats = $state<{ words: number; characters: number }>({ words: 0, characters: 0 });
 
   // Dialogs
-  let showFind = $state(false);
-  let showLink = $state(false);
-  let showImage = $state(false);
+  let dialog = $state<DialogKind | null>(null);
   let findText = $state('');
   let replaceText = $state('');
-  let linkUrl = $state('https://');
-  let linkLabel = $state('');
-  let imageUrl = $state('');
+  let matchCount = $state(0);
+  let sources = $state<Source[]>([]);
+  let citationStyle = $state<CitationStyle>('APA');
+  let comments = $state<Comment[]>([]);
+  let spelling = $state<review.SpellingIssue[]>([]);
+  let inspector = $state<InspectionFinding[]>([]);
+  let thesaurusWord = $state('');
+  let thesaurusWords = $state<string[]>([]);
+  let versions = $state<Version[]>([]);
+  let recovery = $state<Draft[]>([]);
+  let recipients = $state<Recipients>({ fields: [], rows: [] });
+  let activeRecord = $state(0);
+  let mergeHighlight = $state(true);
+
   let fileInput = $state<HTMLInputElement>();
+  let mailInput = $state<HTMLInputElement>();
 
   function getEditor(): HTMLElement | undefined {
     return canvas?.getEl();
+  }
+
+  // ── State refresh ───────────────────────────────────────────────────────
+  function refreshAll() {
+    editorState = readState();
+    navRevision++;
   }
 
   function onChange(next: string, nextStats: TextStats) {
     html = next;
     stats = nextStats;
     dirty = true;
-    // Typing collapses the selection; reflect that in the selection counter.
     selStats = selectionStats();
+    refreshAll();
+    autosaver.touch();
   }
 
   function refreshStats() {
     const el = getEditor();
-    if (el) stats = textStats(el);
+    if (el) {
+      stats = textStats(el);
+      html = el.innerHTML;
+    }
+    refreshAll();
   }
 
-  // ── Persistence ──────────────────────────────────────────────────────────
-  function saveDraft() {
-    try {
-      localStorage.setItem(STORAGE_KEY, html);
-      localStorage.setItem(STORAGE_TITLE, docTitle);
-      lastSaved = new Date().toLocaleTimeString();
+  // ── Autosave ────────────────────────────────────────────────────────────
+  const autosaver = {
+    touch: () => {
+      dirty = true;
+    },
+    flush: () => {
+      saveDraft(getEditor()?.innerHTML ?? html, docTitle);
       dirty = false;
-    } catch (e) {
-      notify.fromError(e, 'Gagal menyimpan draf lokal');
-    }
-  }
+    },
+  };
 
-  function loadDraft() {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      const savedTitle = localStorage.getItem(STORAGE_TITLE);
-      if (saved) html = saved;
-      if (savedTitle) docTitle = savedTitle;
-    } catch {
-      /* first run */
-    }
+  function saveDraftNow() {
+    saveDraft(getEditor()?.innerHTML ?? html, docTitle);
+    lastSaved = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    dirty = false;
   }
 
   async function saveToWorkspace() {
     saving = true;
     try {
-      // Save a copy to the mounted device folder when the device bridge is
-      // mounted; otherwise fall back to a browser download.
       const body = getEditor()?.innerHTML ?? html;
-      const base64 = toBase64(wrapHtmlDocument(body));
+      pushVersion(body, docTitle);
+      saveDraft(body, docTitle);
       const filename = `${safeName(docTitle)}.html`;
-      const res = await deviceBridge.saveAgentFileToDevice(
-        filename,
-        base64,
-        'text/html',
-        undefined
-      );
-      saveDraft();
-      if (res.success) {
-        notify.success(`Tersimpan: ${filename} (${res.mode})`);
-      } else {
-        notify.error('Gagal menyimpan berkas');
-      }
+      const base64 = toBase64(wrapHtmlDocument(body));
+      const res = await deviceBridge.saveAgentFileToDevice(filename, base64, 'text/html', undefined);
+      saveDraftNow();
+      versions = listVersions();
+      if (res.success) notify.success(`Tersimpan: ${filename} (${res.mode})`);
+      else notify.error('Gagal menyimpan berkas');
     } catch (e) {
       notify.fromError(e, 'Gagal menyimpan');
     } finally {
@@ -136,18 +211,13 @@
   function wrapHtmlDocument(body: string): string {
     return `<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${docTitle}</title></head><body>${body}</body></html>`;
   }
-
-  /** UTF-8 safe base64 (handles Indonesian diacritics & any Unicode). */
   function toBase64(text: string): string {
     const bytes = new TextEncoder().encode(text);
     let binary = '';
     const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-    }
+    for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
     return btoa(binary);
   }
-
   function safeName(name: string): string {
     return (name || 'naskah').replace(/[^a-zA-Z0-9-_ ]/g, '').trim().replace(/\s+/g, '-') || 'naskah';
   }
@@ -159,23 +229,22 @@
     downloadDocument(el.innerHTML, format, safeName(docTitle), docTitle);
     notify.success(`Diekspor sebagai .${format}`);
   }
-
   function handlePrint() {
     printDocument();
   }
-
   function triggerOpen() {
     fileInput?.click();
   }
-
   async function onFilePicked(e: Event) {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
     try {
+      stashRecovery(getEditor()?.innerHTML ?? html, docTitle);
       const content = await readImportedFile(file);
       html = content;
       docTitle = file.name.replace(/\.[^./]+$/, '');
+      properties.title = docTitle;
       refreshStats();
       dirty = true;
       notify.success(`Dibuka: ${file.name}`);
@@ -186,289 +255,757 @@
     }
   }
 
-  // ── Dialog actions ──────────────────────────────────────────────────────
-  let matchCount = $state(0);
+  function newFromTemplate(tpl: Template) {
+    stashRecovery(getEditor()?.innerHTML ?? html, docTitle);
+    html = tpl.html;
+    docTitle = tpl.label;
+    properties.title = tpl.label;
+    refreshStats();
+    showFileBackstage = false;
+    dirty = true;
+    notify.info(`Dokumen baru: ${tpl.label}`);
+  }
 
+  // ── Find & replace ──────────────────────────────────────────────────────
   function doReplace() {
     const el = getEditor();
     if (!el || !findText) return;
     const res = replaceAll(el, findText, replaceText);
-    html = el.innerHTML;
     refreshStats();
     matchCount = countMatches(el, findText);
     notify.info(`${res.count} kemunculan diganti`);
   }
-
-  /** Jump to the next/previous match of the current find text. */
   function doFindNext(backward = false) {
     const el = getEditor();
     if (!el || !findText) return;
-    const found = findNext(el, findText, backward);
-    if (!found) notify.warning(`Tidak ada "${findText}"`);
+    if (!findNext(el, findText, backward)) notify.warning(`Tidak ada "${findText}"`);
   }
 
-  /** Insert a localized date+time stamp at the caret. */
-  function insertDateTime() {
-    const now = new Date();
-    const stamp = now.toLocaleString('id-ID', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    insert.text(stamp);
+  // ── Dialog submit dispatcher ────────────────────────────────────────────
+  function submitDialog(kind: DialogKind, payload: Record<string, unknown>) {
+    const el = getEditor();
+    switch (kind) {
+      case 'link':
+        insert.link(String(payload.href), String(payload.label) || undefined);
+        dialog = null;
+        break;
+      case 'image':
+        insert.image(String(payload.src), String(payload.alt ?? ''));
+        dialog = null;
+        break;
+      case 'font':
+        applyFontDialog(payload as never);
+        dialog = null;
+        break;
+      case 'paragraph': {
+        const p = payload as { align: Align; indentLeft: number; lineSpacing: string; spacingBefore: number; spacingAfter: number };
+        para.align(p.align);
+        paraFx.leftIndent(p.indentLeft);
+        paraFx.lineSpacing(p.lineSpacing);
+        paraFx.spaceBefore(p.spacingBefore);
+        paraFx.spaceAfter(p.spacingAfter);
+        dialog = null;
+        break;
+      }
+      case 'pagesetup': {
+        const p = payload as Record<string, never>;
+        section = {
+          ...section,
+          paper: p['paper'] as never,
+          orientation: p['orientation'] as never,
+          margins: { top: p['mTop'] as never, bottom: p['mBottom'] as never, left: p['mLeft'] as never, right: p['mRight'] as never },
+          header: String(p['headerText'] ?? ''),
+          footer: String(p['footerText'] ?? ''),
+          showPageNumbers: Boolean(p['showPageNumbers']),
+          pageNumberFormat: p['pageNumberFormat'] as never,
+          pageBorder: { ...section.pageBorder, on: Boolean(p['pageBorder']), color: String(p['pageBorderColor'] ?? section.pageBorder.color) },
+          lineNumbers: Boolean(p['lineNumbers']),
+          hyphenation: Boolean(p['hyphenation']),
+        };
+        saveSection(section);
+        dialog = null;
+        break;
+      }
+      case 'watermark':
+        section = {
+          ...section,
+          watermark: payload.remove ? null : { text: String(payload.text), opacity: Number(payload.opacity), rotate: Number(payload.rotate), color: '#888888' },
+        };
+        saveSection(section);
+        dialog = null;
+        break;
+      case 'cover':
+        insert.html(coverPage(String(payload.title), String(payload.subtitle), payload.template as never));
+        dialog = null;
+        break;
+      case 'symbol':
+        insert.text(String(payload.char));
+        dialog = null;
+        break;
+      case 'equation':
+        insert.html(equation(String(payload.latex)));
+        dialog = null;
+        break;
+      case 'quickparts': {
+        const what = String(payload.what);
+        const parts: Record<string, string> = {
+          address: '<p>Kepada Yth.<br/>Bapak/Ibu ______________<br/>Alamat<br/>Kota</p>',
+          greeting: '<p>Dengan hormat,</p>',
+          closing: '<p style="text-align:right">Hormat kami,</p>',
+          signature: signatureLine('Nama Lengkap', 'Jabatan'),
+          date: `<p>${dateTimeStamp()}</p>`,
+          title: `<p style="font-weight:700;font-size:14pt">${docTitle}</p>`,
+        };
+        insert.html(parts[what] ?? '');
+        dialog = null;
+        break;
+      }
+      case 'chart':
+        insert.html(chartBlock(payload.kind as never, payload.values as number[]));
+        dialog = null;
+        break;
+      case 'smartart':
+        insert.html(smartArt(payload.steps as string[]));
+        dialog = null;
+        break;
+      case 'caption':
+        insert.html(captionMarkup(String(payload.label), String(payload.text)));
+        if (el) renumberCaptions(el);
+        dialog = null;
+        break;
+      case 'crossref':
+        insert.html(`<a href="#${payload.target}" style="color:inherit;text-decoration:underline dotted">${payload.label}</a>`);
+        dialog = null;
+        break;
+      case 'comment': {
+        const id = review.markComment(properties.author || 'Penulis', String(payload.text));
+        if (id && el) {
+          comments = review.collectComments(el);
+          reviewOpen = true;
+          reviewTab = 'comments';
+        } else {
+          notify.warning('Pilih teks terlebih dahulu untuk dikomentari.');
+        }
+        dialog = null;
+        break;
+      }
+      case 'pagecolor':
+        section = { ...section, pageColor: String(payload.color) };
+        saveSection(section);
+        dialog = null;
+        break;
+      case 'textbox':
+        insert.html(textBox(String(payload.text)));
+        dialog = null;
+        break;
+      case 'wordart':
+        insert.html(wordArt(String(payload.text)));
+        dialog = null;
+        break;
+      case 'signature':
+        insert.html(signatureLine(String(payload.name), String(payload.title)));
+        dialog = null;
+        break;
+      case 'tableborders':
+        tableTools.borders(String(payload.spec));
+        dialog = null;
+        break;
+      case 'pictureformat': {
+        const activeImg = document.querySelector<HTMLImageElement>('.naskah-content img:focus, .naskah-content img:hover');
+        if (!activeImg) {
+          notify.warning('Klik gambar terlebih dahulu.');
+          break;
+        }
+        if (payload.reset) pictureTools.reset(activeImg);
+        else {
+          if (payload.width) pictureTools.resize(activeImg, Number(payload.width));
+          if (payload.rotate) pictureTools.rotate(activeImg, Number(payload.rotate));
+          if (payload.alt) pictureTools.alt(activeImg, String(payload.alt));
+          if (payload.wrap) pictureTools.wrap(activeImg, payload.wrap as never);
+        }
+        dialog = null;
+        break;
+      }
+      case 'bookmark':
+        insert.html(`<a id="${safeAnchor(String(payload.name))}" data-object="bookmark"></a>`);
+        dialog = null;
+        break;
+    }
     refreshStats();
   }
 
-  function openLinkDialog() {
-    const sel = window.getSelection()?.toString() ?? '';
-    linkLabel = sel;
-    linkUrl = 'https://';
-    showLink = true;
+  function safeAnchor(s: string): string {
+    return (s || 'penanda').replace(/[^\w-]/g, '-');
   }
-  function applyLink() {
-    if (!linkUrl.trim()) return;
-    insert.link(linkUrl.trim(), linkLabel.trim() || undefined);
-    showLink = false;
+
+  // ── Notes / bibliography / index ────────────────────────────────────────
+  function insertNote(kind: 'footnote' | 'endnote') {
+    const el = getEditor();
+    if (!el) return;
+    const { anchor, block } = noteMarkup('[tulis catatan di sini]', kind);
+    insert.html(anchor);
+    const list = ensureNotesList(el, kind);
+    list.insertAdjacentHTML('beforeend', block);
+    renumberNotes(el);
     refreshStats();
   }
 
-  function openImageDialog() {
-    imageUrl = '';
-    showImage = true;
-  }
-  function applyImageUrl() {
-    if (!imageUrl.trim()) return;
-    insert.image(imageUrl.trim(), 'gambar');
-    showImage = false;
+  function insertBibliography() {
+    const style = citationStyle;
+    insert.html(bibliographyMarkup(sources, style));
+    dialog = null;
     refreshStats();
   }
-  function applyImageFile(e: Event) {
+
+  // ── TOC / TOF / Index ───────────────────────────────────────────────────
+  function insertToc() {
+    const el = getEditor();
+    if (!el) return;
+    insert.html(renderToc(collectHeadings(el)));
+    refreshStats();
+  }
+  function insertTableOfFigures() {
+    const el = getEditor();
+    if (!el) return;
+    insert.html(tableOfFigures(el));
+    refreshStats();
+  }
+  function insertIndex() {
+    insert.html('<div data-object="index"><h2>Indeks</h2><p style="color:#888">[Indeks dibangun dari entri yang ditandai]</p></div><p><br/></p>');
+    refreshStats();
+  }
+
+  // ── Review actions ──────────────────────────────────────────────────────
+  function toggleTracking() {
+    trackingOn = !trackingOn;
+    review.tracking.enabled = trackingOn;
+    review.tracking.author = properties.author || 'Penulis';
+    notify.info(trackingOn ? 'Lacak perubahan: AKTIF' : 'Lacak perubahan: NONAKTIF');
+  }
+
+  function runSpellcheck() {
+    const el = getEditor();
+    if (!el) return;
+    spelling = review.spellCheck(el.innerText);
+    reviewOpen = true;
+    reviewTab = 'spelling';
+    notify.info(`${spelling.length} kata ditandai`);
+  }
+
+  function openThesaurus() {
+    const sel = window.getSelection()?.toString().trim() ?? '';
+    thesaurusWord = sel.split(/\s+/)[0] ?? '';
+    thesaurusWords = review.lookupSynonyms(thesaurusWord);
+    reviewOpen = true;
+    reviewTab = 'thesaurus';
+  }
+
+  function applySynonym(word: string) {
+    document.execCommand('insertText', false, word);
+    refreshStats();
+  }
+
+  function replaceSpelling(word: string, withWord: string) {
+    const el = getEditor();
+    if (!el) return;
+    replaceAll(el, word, withWord);
+    spelling = review.spellCheck(el.innerText);
+    refreshStats();
+  }
+
+  function runInspect() {
+    const el = getEditor();
+    if (!el) return;
+    inspector = review.inspectDocument(el);
+    reviewOpen = true;
+    reviewTab = 'inspect';
+    dialog = 'inspect';
+  }
+
+  function readAloud() {
+    const el = getEditor();
+    if (!el) return;
+    if (!review.readAloud(el.innerText)) notify.warning('Peramban tidak mendukung baca nyaring.');
+  }
+
+  // ── Mail merge ──────────────────────────────────────────────────────────
+  function triggerMailUpload() {
+    mailInput?.click();
+  }
+  async function onMailPicked(e: Event) {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      insert.image(String(reader.result), file.name);
-      showImage = false;
-      refreshStats();
-    };
-    reader.readAsDataURL(file);
+    recipients = parseCsv(await file.text());
+    activeRecord = 0;
+    notify.success(`${recipients.rows.length} penerima dimuat (${recipients.fields.length} kolom)`);
     input.value = '';
+  }
+  function insertMergeField(field: string) {
+    insert.text(mergePlaceholder(field));
+    refreshStats();
+  }
+  function mergeAllRecords() {
+    const el = getEditor();
+    if (!el) return;
+    const merged = mergeAll(el.innerHTML, recipients);
+    stashRecovery(el.innerHTML, docTitle);
+    html = merged;
+    showMailings = false;
+    refreshStats();
+    notify.success(`Digabung menjadi ${recipients.rows.length} dokumen.`);
+  }
+  function insertLabels(layout: LayoutName) {
+    const el = getEditor();
+    if (!el) return;
+    insert.html(labelSheet(el.innerHTML, recipients, layout));
+    refreshStats();
+  }
+
+  // ── Command registry (Tell-Me) ──────────────────────────────────────────
+  function buildRegistry() {
+    const cmds: Command[] = [];
+    const add = (id: string, label: string, tab: string, group: string, run: () => void, extra: Partial<Command> = {}) =>
+      cmds.push({ id, label, tab, group, run, ...extra });
+    add('file.save', 'Simpan dokumen', 'File', 'Backstage', saveToWorkspace, { keywords: ['save', 'simpan'], shortcut: 'Ctrl+S' });
+    add('file.open', 'Buka dokumen', 'File', 'Backstage', triggerOpen, { keywords: ['open', 'buka'] });
+    add('file.print', 'Cetak / PDF', 'File', 'Backstage', handlePrint, { keywords: ['print', 'cetak', 'pdf'], shortcut: 'Ctrl+P' });
+    add('file.new', 'Dokumen baru dari template', 'File', 'Backstage', () => (showFileBackstage = true), { keywords: ['new', 'template'] });
+    add('edit.find', 'Cari & ganti', 'Home', 'Penyuntingan', () => (dialog = 'find'), { keywords: ['find', 'cari', 'replace'], shortcut: 'Ctrl+F' });
+    add('format.bold', 'Tebal', 'Home', 'Font', () => document.execCommand('bold'), { keywords: ['bold', 'tebal'], shortcut: 'Ctrl+B' });
+    add('format.italic', 'Miring', 'Home', 'Font', () => document.execCommand('italic'), { keywords: ['italic', 'miring'] });
+    add('format.underline', 'Garis bawah', 'Home', 'Font', () => document.execCommand('underline'), { keywords: ['underline'] });
+    add('format.smallCaps', 'Kapital kecil', 'Home', 'Font', charFx.smallCaps);
+    add('format.allCaps', 'Semua kapital', 'Home', 'Font', charFx.allCaps);
+    add('format.highlight', 'Sorotan', 'Home', 'Font', () => document.execCommand('hiliteColor', false, '#FFEB3B'));
+    add('format.clear', 'Hapus format', 'Home', 'Font', () => document.execCommand('removeFormat'));
+    add('para.alignLeft', 'Rata kiri', 'Home', 'Paragraf', () => document.execCommand('justifyLeft'));
+    add('para.justify', 'Rata kanan-kiri', 'Home', 'Paragraf', () => document.execCommand('justifyFull'));
+    add('para.bullets', 'Daftar butir', 'Home', 'Paragraf', () => document.execCommand('insertUnorderedList'));
+    add('para.numbering', 'Daftar bernomor', 'Home', 'Paragraf', () => document.execCommand('insertOrderedList'));
+    add('styles.pane', 'Panel gaya', 'Home', 'Gaya', () => (showStylesPane = !showStylesPane));
+    add('insert.table', 'Sisipkan tabel', 'Insert', 'Tabel', () => insert.table(3, 3));
+    add('insert.picture', 'Sisipkan gambar', 'Insert', 'Ilustrasi', () => (dialog = 'image'));
+    add('insert.link', 'Sisipkan tautan', 'Insert', 'Tautan', () => (dialog = 'link'), { shortcut: 'Ctrl+K' });
+    add('insert.chart', 'Sisipkan diagram', 'Insert', 'Ilustrasi', () => (dialog = 'chart'));
+    add('insert.smartArt', 'Sisipkan SmartArt', 'Insert', 'Ilustrasi', () => (dialog = 'smartart'));
+    add('insert.equation', 'Sisipkan persamaan', 'Insert', 'Simbol', () => (dialog = 'equation'));
+    add('insert.coverPage', 'Sampul', 'Insert', 'Halaman', () => (dialog = 'cover'));
+    add('insert.textBox', 'Kotak teks', 'Insert', 'Teks', () => (dialog = 'textbox'));
+    add('insert.wordArt', 'WordArt', 'Insert', 'Teks', () => (dialog = 'wordart'));
+    add('insert.dropCap', 'Drop cap', 'Insert', 'Teks', () => { insert.html(dropCap(3)); });
+    add('design.watermark', 'Tanda air', 'Design', 'Latar Halaman', () => (dialog = 'watermark'));
+    add('layout.pageSetup', 'Penyiapan halaman', 'Layout', 'Penyiapan Halaman', () => (dialog = 'pagesetup'));
+    add('layout.margins', 'Margin normal', 'Layout', 'Penyiapan Halaman', () => applyMargin('Normal'));
+    add('references.toc', 'Daftar isi', 'References', 'Daftar Isi', insertToc, { keywords: ['toc', 'daftar isi'] });
+    add('references.footnote', 'Catatan kaki', 'References', 'Catatan Kaki', () => insertNote('footnote'));
+    add('references.endnote', 'Catatan akhir', 'References', 'Catatan Kaki', () => insertNote('endnote'));
+    add('references.citation', 'Sitasi', 'References', 'Sitasi', () => (dialog = 'citations'));
+    add('references.caption', 'Keterangan', 'References', 'Keterangan', () => (dialog = 'caption'));
+    add('review.spelling', 'Ejaan', 'Review', 'Pemeriksaan', runSpellcheck);
+    add('review.thesaurus', 'Tesisaurus', 'Review', 'Pemeriksaan', openThesaurus);
+    add('review.wordCount', 'Hitung kata', 'Review', 'Pemeriksaan', () => { dialog = 'wordcount'; });
+    add('review.newComment', 'Komentar baru', 'Review', 'Komentar', () => { dialog = 'comment'; });
+    add('review.trackChanges', 'Lacak perubahan', 'Review', 'Lacak Perubahan', toggleTracking);
+    add('review.acceptAll', 'Terima semua perubahan', 'Review', 'Lacak Perubahan', acceptAllRevisions);
+    add('review.rejectAll', 'Tolak semua perubahan', 'Review', 'Lacak Perubahan', rejectAllRevisions);
+    add('view.readMode', 'Mode baca', 'View', 'Tampilan', () => (readingMode = !readingMode));
+    add('view.navigationPane', 'Panel navigasi', 'View', 'Tampilan', () => (showNavPane = !showNavPane));
+    add('view.ruler', 'Penggaris', 'View', 'Tampilan', () => (showRuler = !showRuler));
+    add('view.marks', 'Tanda format', 'View', 'Tampilan', () => (showMarks = !showMarks));
+    add('mailings.start', 'Mail merge', 'Mailings', 'Mail Merge', () => (showMailings = !showMailings));
+    commandRegistry.registerAll(cmds);
+  }
+
+  function acceptAllRevisions() {
+    const el = getEditor();
+    if (!el) return;
+    const n = review.acceptAll(el);
+    refreshStats();
+    notify.info(`${n} revisi diterima`);
+  }
+  function rejectAllRevisions() {
+    const el = getEditor();
+    if (!el) return;
+    const n = review.rejectAll(el);
+    refreshStats();
+    notify.info(`${n} revisi ditolak`);
+  }
+
+  // ── Page setup helpers ──────────────────────────────────────────────────
+  function applyMargin(preset: string) {
+    const m = MARGIN_PRESETS[preset] ?? MARGIN_PRESETS.Normal;
+    section = { ...section, margins: { ...m } };
+    saveSection(section);
+  }
+  function toggleOrientation() {
+    section = { ...section, orientation: section.orientation === 'portrait' ? 'landscape' : 'portrait' };
+    saveSection(section);
+  }
+  function setColumns(n: number) {
+    section = { ...section, columns: n };
+    saveSection(section);
+  }
+  function setPageColor(color: string) {
+    section = { ...section, pageColor: color };
+    saveSection(section);
+  }
+  function setSpacing(preset: SectionSetup['paragraphSpacing']) {
+    section = { ...section, paragraphSpacing: preset };
+    saveSection(section);
+  }
+  function applyDocStyle(style: DocStyle) {
+    applyStyle(style);
+    refreshStats();
+  }
+  // Track typing when tracking is enabled.
+  function maybeTrackInsert(e: KeyboardEvent) {
+    if (!trackingOn) return;
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (review.trackInsert(e.key)) refreshStats();
+    }
   }
 
   // ── Keyboard shortcuts ──────────────────────────────────────────────────
   function onKeydown(e: KeyboardEvent) {
     const mod = e.ctrlKey || e.metaKey;
-    if (!mod) return;
+    if (e.altKey && e.key.toLowerCase() === 'q') {
+      e.preventDefault();
+      showCommandSearch = true;
+      return;
+    }
+    if (!mod) {
+      maybeTrackInsert(e);
+      return;
+    }
     const key = e.key.toLowerCase();
     if (key === 's') {
       e.preventDefault();
       saveToWorkspace();
     } else if (key === 'f') {
       e.preventDefault();
-      showFind = true;
+      dialog = 'find';
     } else if (key === 'p') {
       e.preventDefault();
       handlePrint();
     } else if (key === 'g') {
-      // Find next (Ctrl+G) / previous (Ctrl+Shift+G), Word-style.
       e.preventDefault();
       doFindNext(e.shiftKey);
+    } else if (key === 'k') {
+      e.preventDefault();
+      dialog = 'link';
     }
   }
 
+  function onSelectionChange() {
+    selStats = selectionStats();
+    editorState = readState();
+  }
+
   onMount(() => {
-    loadDraft();
-    // Autosave the draft every 20s while the page is open.
+    properties = loadProperties();
+    const draft = loadDraft();
+    if (draft) {
+      html = draft.html;
+      docTitle = draft.title;
+      properties.title = draft.title;
+    } else {
+      properties.title = docTitle;
+    }
+    section = loadSection() ?? defaultSection();
+    sources = loadSources();
+    versions = listVersions();
+    recovery = listRecovery();
+    buildRegistry();
+    refreshStats();
     const timer = setInterval(() => {
-      if (dirty) saveDraft();
+      if (dirty) autosaver.flush();
     }, 20000);
     return () => clearInterval(timer);
   });
 
-  // Refresh the ribbon's pressed-state and selection stats whenever the
-  // selection changes.
-  function onSelectionChange() {
-    ribbon?.refreshState();
-    selStats = selectionStats();
+  // Load/save the citation source list whenever the citations dialog mutates it.
+  function onAddSource(s: Source) {
+    sources = [...sources.filter((x) => x.id !== s.id), s];
+    saveSources(sources);
   }
+  function onRemoveSource(id: string) {
+    sources = sources.filter((x) => x.id !== id);
+    saveSources(sources);
+  }
+  function onInsertCitation(src: Source) {
+    insertCitation(src, citationStyle);
+    refreshStats();
+  }
+
+  const wordCounts = $derived(() => {
+    const el = getEditor();
+    void navRevision;
+    return el ? review.wordCount(el) : { words: 0, characters: 0, charactersNoSpaces: 0, paragraphs: 0, lines: 0, pages: 1 };
+  });
+  const dialogHeadings = $derived.by(() => {
+    const el = getEditor();
+    void navRevision;
+    return el ? collectHeadings(el).map((h) => ({ id: h.id, text: h.text, level: h.level })) : [];
+  });
+  const pageLabel = $derived(`${section.paper}${section.orientation === 'landscape' ? ' ↔' : ''}`);
 </script>
 
 <svelte:window onkeydown={onKeydown} onselectionchange={onSelectionChange} />
 
-<div class="flex flex-col h-[calc(100vh-3.5rem)]">
-  <!-- Page header -->
-  <div class="flex items-center justify-between gap-3 px-4 py-2 border-b border-[var(--border-color)] bg-[var(--bg-surface)]/90">
-    <div class="flex items-center gap-2 min-w-0">
-      <FileText class="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
-      <input
-        bind:value={docTitle}
-        oninput={() => (dirty = true)}
-        class="bg-transparent border-b border-transparent focus:border-[var(--accent-primary)] text-sm font-hud text-[var(--text-primary)] px-1 py-0.5 min-w-0 w-64 md:w-96 outline-none"
-        aria-label="Judul dokumen"
-      />
-      {#if dirty}
-        <span class="text-[9px] font-code text-[var(--status-warning)]">● UNSAVED</span>
-      {:else if lastSaved}
-        <span class="text-[9px] font-code text-[var(--status-success)] flex items-center gap-0.5">
-          <Check class="w-3 h-3" /> {lastSaved}
-        </span>
-      {/if}
-    </div>
-    <button
-      type="button"
-      onclick={saveToWorkspace}
-      disabled={saving}
-      class="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-hud border border-[var(--accent-primary)] text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 chamfer-sm disabled:opacity-50"
-    >
-      <Save class="w-3.5 h-3.5" />
-      {saving ? 'MENYIMPAN…' : 'SIMPAN'}
-    </button>
-  </div>
-
-  <!-- Ribbon -->
-  <NaskahRibbon
-    bind:this={ribbon}
-    {getEditor}
-    {zoom}
-    {pageWidth}
-    {marginY}
-    {readingMode}
-    {darkPaper}
-    onsave={saveToWorkspace}
-    onopen={triggerOpen}
-    onexport={handleExport}
-    onprint={handlePrint}
-    oninsertlink={openLinkDialog}
-    oninsertimage={openImageDialog}
-    oninsertdatetime={insertDateTime}
-    onfind={() => (showFind = true)}
-    onfindnext={doFindNext}
-    onzoom={(z) => (zoom = z)}
-    onpagemargin={(m) => (marginY = m)}
-    onpagewidth={(w) => (pageWidth = w)}
-    ontogglereading={() => (readingMode = !readingMode)}
-    ontoggledarkpaper={() => (darkPaper = !darkPaper)}
-  />
-
-  <!-- Canvas -->
-  <div class="flex-1 overflow-hidden relative">
-    <NaskahCanvas
-      bind:this={canvas}
-      {html}
-      {zoom}
-      reading={readingMode}
-      setup={{
-        width: pageWidth,
-        marginY,
-        marginX: marginY,
-        fontFamily: darkPaper ? "'Times New Roman', Georgia, serif" : "'Times New Roman', Georgia, serif",
+{#if showFileBackstage}
+  <div class="h-[calc(100vh-3.5rem)]">
+    <FileBackstage
+      bind:properties
+      versions={listVersions()}
+      recovery={listRecovery()}
+      onclose={() => (showFileBackstage = false)}
+      onnew={newFromTemplate}
+      onopen={() => { showFileBackstage = false; triggerOpen(); }}
+      onsave={saveToWorkspace}
+      onexportpdf={handlePrint}
+      onexport={handleExport}
+      onrestoreversion={(v) => {
+        html = v.html;
+        docTitle = v.title;
+        showFileBackstage = false;
+        refreshStats();
+        notify.info('Versi dipulihkan');
       }}
-      onchange={onChange}
+      onrecover={(d) => {
+        html = d.html;
+        docTitle = d.title;
+        showFileBackstage = false;
+        refreshStats();
+        notify.success('Draf dipulihkan');
+      }}
+      onsaveproperties={(p) => {
+        properties = p;
+        saveProperties(p);
+        docTitle = p.title;
+        notify.success('Properti tersimpan');
+      }}
+      oninspect={() => { showFileBackstage = false; runInspect(); }}
+      onaccessibility={() => { showFileBackstage = false; runInspect(); }}
     />
   </div>
+{:else}
+  <div class="flex flex-col h-[calc(100vh-3.5rem)]">
+    <!-- Page header -->
+    <div class="flex items-center justify-between gap-3 px-4 py-2 border-b border-[var(--border-color)] bg-[var(--bg-surface)]/90">
+      <div class="flex items-center gap-2 min-w-0">
+        <FileText class="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
+        <input
+          bind:value={docTitle}
+          oninput={() => {
+            properties.title = docTitle;
+            dirty = true;
+          }}
+          class="bg-transparent border-b border-transparent focus:border-[var(--accent-primary)] text-sm font-hud text-[var(--text-primary)] px-1 py-0.5 min-w-0 w-56 md:w-96 outline-none"
+          aria-label="Judul dokumen"
+        />
+        {#if dirty}
+          <span class="text-[9px] font-code text-[var(--status-warning)]">● UNSAVED</span>
+        {:else if lastSaved}
+          <span class="text-[9px] font-code text-[var(--status-success)] flex items-center gap-0.5"><Check class="w-3 h-3" /> {lastSaved}</span>
+        {/if}
+        {#if trackingOn}<span class="text-[9px] font-code text-[var(--accent-primary)]">LACAK ●</span>{/if}
+      </div>
+      <div class="flex items-center gap-2">
+        <button type="button" onclick={() => (showCommandSearch = true)} class="flex items-center gap-1 px-2 py-1.5 text-[11px] font-code border border-[var(--border-color)] text-[var(--text-muted)] chamfer-sm hover:text-[var(--accent-primary)]" title="Cari perintah (Alt+Q)">
+          <span class="hidden sm:inline">CARI PERINTAH</span><span class="sm:hidden">⌕</span>
+        </button>
+        <button
+          type="button"
+          onclick={saveToWorkspace}
+          disabled={saving}
+          class="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-hud border border-[var(--accent-primary)] text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 chamfer-sm disabled:opacity-50"
+        >
+          <Save class="w-3.5 h-3.5" />
+          {saving ? 'MENYIMPAN…' : 'SIMPAN'}
+        </button>
+      </div>
+    </div>
 
-  <!-- Status bar -->
-  <div class="flex items-center justify-between gap-4 px-4 py-1.5 border-t border-[var(--border-color)] bg-[var(--bg-surface)]/90 font-code text-[10px] text-[var(--text-muted)] overflow-x-auto">
-    <div class="flex items-center gap-4 whitespace-nowrap">
-      <span><b class="text-[var(--text-primary)]">{stats.words.toLocaleString()}</b> kata</span>
-      <span><b class="text-[var(--text-primary)]">{stats.characters.toLocaleString()}</b> karakter</span>
-      <span class="hidden sm:inline"><b class="text-[var(--text-primary)]">{stats.charactersNoSpaces.toLocaleString()}</b> tanpa spasi</span>
-      <span class="hidden md:inline"><b class="text-[var(--text-primary)]">{stats.paragraphs}</b> paragraf</span>
-      <span class="hidden md:inline">~{stats.readingMinutes} mnt baca</span>
-      {#if selStats.words > 0}
-        <span class="text-[var(--accent-primary)]" title="Teks terpilih">
-          <b>{selStats.words.toLocaleString()}</b> kata dipilih
-        </span>
+    <!-- Ribbon -->
+    <NaskahRibbon
+      {getEditor}
+      doc={editorState}
+      {zoom}
+      readingMode={readingMode}
+      inTable={editorState.ctx.inTable}
+      inPicture={false}
+      revision={navRevision}
+      onfile={() => (showFileBackstage = true)}
+      onsave={saveToWorkspace}
+      onopen={triggerOpen}
+      onexport={handleExport}
+      onprint={handlePrint}
+      onfind={() => (dialog = 'find')}
+      onfindnext={doFindNext}
+      oninsertlink={() => (dialog = 'link')}
+      oninsertimage={() => (dialog = 'image')}
+      oninsertdatetime={() => { insert.text(dateTimeStamp()); refreshStats(); }}
+      onfontdialog={() => (dialog = 'font')}
+      onparagraphdialog={() => (dialog = 'paragraph')}
+      onpagesetup={() => (dialog = 'pagesetup')}
+      onwatermark={() => (dialog = 'watermark')}
+      ontableborders={() => (dialog = 'tableborders')}
+      oncoverpage={() => (dialog = 'cover')}
+      oninsertsymbol={() => (dialog = 'symbol')}
+      oninsequation={() => (dialog = 'equation')}
+      onquickparts={() => (dialog = 'quickparts')}
+      oninsertcaption={() => (dialog = 'caption')}
+      oncitations={() => (dialog = 'citations')}
+      onbookmark={() => (dialog = 'bookmark')}
+      oncrossreference={() => (dialog = 'crossref')}
+      onnewcomment={() => (dialog = 'comment')}
+      onreviewpane={() => (reviewOpen = true)}
+      onwordcount={() => (dialog = 'wordcount')}
+      onspellcheck={runSpellcheck}
+      onthesaurus={openThesaurus}
+      onreadaloud={readAloud}
+      oninspect={runInspect}
+      ontextbox={() => (dialog = 'textbox')}
+      onwordart={() => (dialog = 'wordart')}
+      ondropcap={() => { insert.html(dropCap(3)); refreshStats(); }}
+      onsignature={() => (dialog = 'signature')}
+      onsmartart={() => (dialog = 'smartart')}
+      onchart={() => (dialog = 'chart')}
+      onpictureformat={() => (dialog = 'pictureformat')}
+      ontracking={toggleTracking}
+      onacceptall={acceptAllRevisions}
+      onrejectall={rejectAllRevisions}
+      onmailings={() => (showMailings = !showMailings)}
+      onlabels={insertLabels}
+      onzoom={(z) => (zoom = z)}
+      onpagetab={() => (showCommandSearch = true)}
+      ontogglereading={() => (readingMode = !readingMode)}
+      ontoggledarkpaper={() => { section = { ...section, darkPaper: !section.darkPaper }; saveSection(section); }}
+      ontogglenavpane={() => (showNavPane = !showNavPane)}
+      ontoggleruler={() => (showRuler = !showRuler)}
+      ontogglemarks={() => (showMarks = !showMarks)}
+      onpageview={() => (pageView = pageView === 1 ? 2 : 1)}
+      onpagecolor={setPageColor}
+      ontoggletoc={insertToc}
+      oninsertindex={insertIndex}
+      ontableoffigures={insertTableOfFigures}
+      oninsertnote={insertNote}
+      oninsertbibliography={insertBibliography}
+      ondesignspacing={setSpacing}
+      onmargin={applyMargin}
+      onorientation={toggleOrientation}
+      oncolumns={setColumns}
+      onequestyle={applyDocStyle}
+    />
+
+    {#if showMailings}
+      <MailingsPane
+        {recipients}
+        onupload={triggerMailUpload}
+        oninsertfield={insertMergeField}
+        oninsertaddress={() => insert.text('{{Alamat}}')}
+        oninsertgreeting={() => insert.text('{{Salam}}')}
+        ontogglehighlight={() => (mergeHighlight = !mergeHighlight)}
+        highlight={mergeHighlight}
+        onmerge={mergeAllRecords}
+        onlabels={() => insertLabels('Label 3×8')}
+        onselectrecord={(i) => (activeRecord = i)}
+        {activeRecord}
+        onexit={() => (showMailings = false)}
+      />
+    {/if}
+
+    <!-- Canvas + side panes -->
+    <div class="flex-1 flex overflow-hidden">
+      {#if showNavPane && !readingMode}
+        <NavigationPane revision={navRevision} getRoot={getEditor} onexit={() => (showNavPane = false)} />
+      {/if}
+      {#if showStylesPane && !readingMode}
+        <StyleGalleryPane activeStyle={editorState.ctx.styleName} onexit={() => (showStylesPane = false)} />
+      {/if}
+      <div class="flex-1 overflow-hidden relative">
+        <NaskahCanvas
+          bind:this={canvas}
+          {html}
+          {zoom}
+          reading={readingMode}
+          {section}
+          {pageView}
+          ruler={showRuler}
+          {showMarks}
+          onchange={onChange}
+        />
+      </div>
+      {#if reviewOpen && !readingMode}
+        <ReviewPane
+          tab={reviewTab}
+          {comments}
+          {spelling}
+          {inspector}
+          counts={wordCounts()}
+          {thesaurusWord}
+          synonyms={thesaurusWords}
+          ontab={(t) => (reviewTab = t)}
+          onjumpcomment={(id) => { const el = getEditor(); if (el) review.focusComment(el, id); }}
+          onresolve={(id) => { const el = getEditor(); if (el) { review.resolveComment(el, id); comments = review.collectComments(el); refreshStats(); } }}
+          ondelete={(id) => { const el = getEditor(); if (el) { review.deleteComment(el, id); comments = review.collectComments(el); refreshStats(); } }}
+          onreplacespelling={replaceSpelling}
+          onapplysynonym={applySynonym}
+          onexit={() => (reviewOpen = false)}
+        />
       {/if}
     </div>
-    <div class="flex items-center gap-3 whitespace-nowrap">
-      <span>{pageWidth === 794 ? 'A4' : pageWidth === 816 ? 'Letter' : 'A5'} · {zoom}%</span>
-      {#if deviceBridge.directoryHandle}
-        <span class="text-[var(--status-success)]">DISK: {deviceBridge.mountedFolderName}</span>
-      {/if}
-    </div>
-  </div>
-</div>
 
-<!-- Hidden file input for Open -->
-<input
-  bind:this={fileInput}
-  type="file"
-  accept=".html,.htm,.md,.txt,.doc,.docx"
-  onchange={onFilePicked}
-  class="hidden"
-/>
-
-<!-- Find & Replace dialog -->
-{#if showFind}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="presentation" onpointerdown={() => (showFind = false)}>
-    <div class="w-full max-w-md border border-[var(--border-color)] bg-[var(--bg-surface)] chamfer p-4" onpointerdown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Cari dan ganti" tabindex="-1">
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="font-hud text-sm text-[var(--text-primary)]">CARI & GANTI</h3>
-        <button type="button" onclick={() => (showFind = false)} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]"><X class="w-4 h-4" /></button>
+    <!-- Status bar -->
+    <div class="naskah-status flex items-center justify-between gap-4 px-4 py-1.5 border-t border-[var(--border-color)] bg-[var(--bg-surface)]/90 font-code text-[10px] text-[var(--text-muted)] overflow-x-auto">
+      <div class="flex items-center gap-4 whitespace-nowrap">
+        <span><b class="text-[var(--text-primary)]">{formatNumber(stats.words)}</b> kata</span>
+        <span><b class="text-[var(--text-primary)]">{formatNumber(stats.characters)}</b> karakter</span>
+        <span class="hidden sm:inline"><b class="text-[var(--text-primary)]">{formatNumber(stats.charactersNoSpaces)}</b> tanpa spasi</span>
+        <span class="hidden md:inline"><b class="text-[var(--text-primary)]">{stats.paragraphs}</b> paragraf</span>
+        <span class="hidden md:inline">~{stats.readingMinutes} mnt baca</span>
+        {#if selStats.words > 0}
+          <span class="text-[var(--accent-primary)]" title="Teks terpilih"><b>{formatNumber(selStats.words)}</b> kata dipilih</span>
+        {/if}
       </div>
-      <label for="naskah-find" class="block text-[11px] font-code text-[var(--text-muted)] mb-1">Cari</label>
-      <input id="naskah-find" bind:value={findText} class="w-full mb-3 px-2 py-1.5 bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-sm text-sm text-[var(--text-primary)] outline-none" placeholder="teks yang dicari" />
-      <label for="naskah-replace" class="block text-[11px] font-code text-[var(--text-muted)] mb-1">Ganti dengan</label>
-      <input id="naskah-replace" bind:value={replaceText} class="w-full mb-4 px-2 py-1.5 bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-sm text-sm text-[var(--text-primary)] outline-none" placeholder="teks pengganti" />
-      <div class="flex items-center justify-between gap-2">
-        <div class="flex gap-2">
-          <button type="button" onclick={() => doFindNext(true)} class="px-3 py-1.5 text-[11px] font-hud border border-[var(--border-color)] text-[var(--text-primary)] chamfer-sm hover:bg-[var(--bg-elevated)]">SEBELUMNYA</button>
-          <button type="button" onclick={() => doFindNext(false)} class="px-3 py-1.5 text-[11px] font-hud border border-[var(--border-color)] text-[var(--text-primary)] chamfer-sm hover:bg-[var(--bg-elevated)]">BERIKUTNYA</button>
-        </div>
-        <button type="button" onclick={doReplace} class="px-3 py-1.5 text-[11px] font-hud bg-[var(--accent-primary)] text-[var(--on-accent)] chamfer-sm">GANTI SEMUA</button>
-      </div>
-      <div class="flex justify-end mt-3">
-        <button type="button" onclick={() => (showFind = false)} class="px-3 py-1.5 text-[11px] font-hud border border-[var(--border-color)] text-[var(--text-muted)] chamfer-sm">TUTUP</button>
+      <div class="flex items-center gap-3 whitespace-nowrap">
+        <span>{pageLabel} · {section.margins.top}px · {zoom}%</span>
+        {#if deviceBridge.directoryHandle}
+          <span class="text-[var(--status-success)]">DISK: {deviceBridge.mountedFolderName}</span>
+        {/if}
       </div>
     </div>
   </div>
 {/if}
 
-<!-- Insert link dialog -->
-{#if showLink}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="presentation" onpointerdown={() => (showLink = false)}>
-    <div class="w-full max-w-md border border-[var(--border-color)] bg-[var(--bg-surface)] chamfer p-4" onpointerdown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Sisipkan tautan" tabindex="-1">
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="font-hud text-sm text-[var(--text-primary)]">SISIPKAN TAUTAN</h3>
-        <button type="button" onclick={() => (showLink = false)} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]"><X class="w-4 h-4" /></button>
-      </div>
-      <label for="naskah-link-url" class="block text-[11px] font-code text-[var(--text-muted)] mb-1">URL</label>
-      <input id="naskah-link-url" bind:value={linkUrl} class="w-full mb-3 px-2 py-1.5 bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-sm text-sm text-[var(--text-primary)] outline-none" placeholder="https://" />
-      <label for="naskah-link-label" class="block text-[11px] font-code text-[var(--text-muted)] mb-1">Teks tampilan (opsional)</label>
-      <input id="naskah-link-label" bind:value={linkLabel} class="w-full mb-4 px-2 py-1.5 bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-sm text-sm text-[var(--text-primary)] outline-none" placeholder="teks tautan" />
-      <div class="flex justify-end gap-2">
-        <button type="button" onclick={() => (showLink = false)} class="px-3 py-1.5 text-[11px] font-hud border border-[var(--border-color)] text-[var(--text-muted)] chamfer-sm">BATAL</button>
-        <button type="button" onclick={applyLink} class="px-3 py-1.5 text-[11px] font-hud bg-[var(--accent-primary)] text-[var(--on-accent)] chamfer-sm">SISIPKAN</button>
-      </div>
-    </div>
-  </div>
+<!-- Hidden file inputs -->
+<input bind:this={fileInput} type="file" accept=".html,.htm,.md,.txt,.doc,.docx,.odt,.rtf" onchange={onFilePicked} class="hidden" />
+<input bind:this={mailInput} type="file" accept=".csv,.txt" onchange={onMailPicked} class="hidden" />
+
+<!-- Dialogs -->
+{#if dialog}
+  <EditorDialogs
+    kind={dialog}
+    onexit={() => (dialog = null)}
+    onsubmit={submitDialog}
+    bind:findText
+    bind:replaceText
+    {matchCount}
+    onfindnext={doFindNext}
+    onreplace={doReplace}
+    {sources}
+    bind:citationStyle
+    onaddsource={onAddSource}
+    onremovesource={onRemoveSource}
+    oninsertcitation={onInsertCitation}
+    oninsertbibliography={insertBibliography}
+    headings={dialogHeadings}
+    findings={inspector}
+    counts={wordCounts()}
+  />
 {/if}
 
-<!-- Insert image dialog -->
-{#if showImage}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="presentation" onpointerdown={() => (showImage = false)}>
-    <div class="w-full max-w-md border border-[var(--border-color)] bg-[var(--bg-surface)] chamfer p-4" onpointerdown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Sisipkan gambar" tabindex="-1">
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="font-hud text-sm text-[var(--text-primary)]">SISIPKAN GAMBAR</h3>
-        <button type="button" onclick={() => (showImage = false)} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]"><X class="w-4 h-4" /></button>
-      </div>
-      <label for="naskah-image-url" class="block text-[11px] font-code text-[var(--text-muted)] mb-1">URL gambar</label>
-      <div class="flex gap-2 mb-3">
-        <input id="naskah-image-url" bind:value={imageUrl} class="flex-1 px-2 py-1.5 bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-sm text-sm text-[var(--text-primary)] outline-none" placeholder="https://…" />
-        <button type="button" onclick={applyImageUrl} class="px-3 py-1.5 text-[11px] font-hud bg-[var(--accent-primary)] text-[var(--on-accent)] chamfer-sm">OK</button>
-      </div>
-      <div class="text-center text-[10px] font-code text-[var(--text-muted)] mb-2">— atau —</div>
-      <label class="block">
-        <span class="inline-block w-full text-center px-3 py-2 text-[11px] font-hud border border-[var(--border-color)] text-[var(--text-primary)] chamfer-sm cursor-pointer hover:bg-[var(--bg-elevated)]">
-          PILIH BERKAS GAMBAR
-        </span>
-        <input type="file" accept="image/*" onchange={applyImageFile} class="hidden" />
-      </label>
-    </div>
-  </div>
-{/if}
+<!-- Tell-Me command search -->
+<CommandSearch open={showCommandSearch} onexit={() => (showCommandSearch = false)} />

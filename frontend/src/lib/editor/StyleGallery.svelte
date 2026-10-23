@@ -14,8 +14,10 @@
     /** Container direction; 'row' for the ribbon, 'col' for the side pane. */
     direction?: 'row' | 'col';
     compact?: boolean;
+    /** Notify the page that a style was applied so it can record history. */
+    onequestyle?: (style: DocStyle) => void;
   }
-  let { activeStyle, direction = 'row', compact = false }: Props = $props();
+  let { activeStyle, direction = 'row', compact = false, onequestyle }: Props = $props();
 
   let custom = $state<DocStyle[]>(loadCustomStyles());
   let naming = $state(false);
@@ -26,6 +28,7 @@
   function pick(style: DocStyle) {
     applyStyle(style);
     activeStyle = style.name;
+    onequestyle?.(style);
   }
 
   function beginCreate() {
