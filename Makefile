@@ -275,6 +275,10 @@ test-file: ## Jalankan satu file test: make test-file F=tests/test_api.py
 check-frontend: ## Type-check frontend (svelte-check)
 	$(COMPOSE) exec -T $(FRONTEND_SVC) pnpm run check
 
+.PHONY: test-frontend
+test-frontend: ## Jalankan unit test editor (vitest)
+	$(COMPOSE) exec -T $(FRONTEND_SVC) pnpm run test
+
 .PHONY: check
 check: check-frontend ## Jalankan semua pemeriksaan statis
 

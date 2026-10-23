@@ -15,6 +15,8 @@
 
 export type Align = 'left' | 'center' | 'right' | 'justify';
 
+import { plainText } from './text';
+
 const BLOCK_SELECTOR = 'p,div,h1,h2,h3,h4,h5,h6,li,blockquote,pre';
 
 function exec(command: string, value?: string): boolean {
@@ -432,10 +434,12 @@ export interface TextStats {
 }
 
 export function textStats(root: HTMLElement): TextStats {
-	const text = root.innerText || '';
+	// `plainText` avoids the browser-only `innerText` so the same numbers are
+	// produced in the test environment and in every engine the app supports.
+	const text = plainText(root);
 	const trimmed = text.trim();
 	const words = trimmed ? trimmed.split(/\s+/).length : 0;
-	const paragraphs = trimmed ? trimmed.split(/\n{2,}/).filter((p) => p.trim()).length : 0;
+	const paragraphs = trimmed ? trimmed.split(/\n+/).filter((p) => p.trim()).length : 0;
 	const sentences = trimmed ? (trimmed.match(/[^.!?]+[.!?]+/g) || [trimmed]).length : 0;
 	return {
 		words,

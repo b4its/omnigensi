@@ -21,6 +21,7 @@
  */
 
 import { buildDocx, buildLatex, buildOdt, buildRtf, stripOfficeXmlMarkup } from './fileFormats';
+import { plainText } from './text';
 
 export type ExportFormat = 'docx' | 'doc' | 'odt' | 'rtf' | 'tex' | 'html' | 'md' | 'txt';
 
@@ -111,8 +112,8 @@ export function htmlToMarkdown(root: HTMLElement): string {
 			case 'BLOCKQUOTE':
 				lines.push(`> ${text}`);
 				break;
-			case 'PRE':
-				lines.push('```\n' + (el.innerText ?? '') + '\n```');
+			case "PRE":
+				lines.push("```\n" + plainText(el) + "\n```");
 				break;
 			case 'UL':
 			case 'OL': {
@@ -190,7 +191,7 @@ export function serialize(html: string, format: ExportFormat, title = 'Naskah'):
 	// txt (docx/odt are binary and handled in downloadDocument)
 	const div = document.createElement('div');
 	div.innerHTML = clean;
-	return (div.innerText || '').trim() + '\n';
+	return plainText(div) + '\n';
 }
 
 const MIME: Record<ExportFormat, string> = {

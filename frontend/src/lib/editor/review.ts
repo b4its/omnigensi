@@ -11,8 +11,9 @@
  * while tracking is enabled.
  */
 
-// ── Comments ───────────────────────────────────────────────────────────────
+import { countText } from './text';
 
+// ── Comments ───────────────────────────────────────────────────────────────
 let commentSeq = 0;
 export function nextCommentId(): string {
 	commentSeq += 1;
@@ -193,17 +194,7 @@ export interface WordCount {
 }
 
 export function wordCount(root: HTMLElement, pageCapacity = 500): WordCount {
-	const text = root.innerText ?? '';
-	const trimmed = text.trim();
-	const words = trimmed ? trimmed.split(/\s+/).length : 0;
-	return {
-		words,
-		characters: text.length,
-		charactersNoSpaces: text.replace(/\s/g, '').length,
-		paragraphs: trimmed ? trimmed.split(/\n{2,}/).filter(Boolean).length : 0,
-		lines: text.split('\n').length,
-		pages: Math.max(1, Math.ceil(words / pageCapacity)),
-	};
+	return countText(root, pageCapacity);
 }
 
 // ── Spelling & grammar ────────────────────────────────────────────────────
