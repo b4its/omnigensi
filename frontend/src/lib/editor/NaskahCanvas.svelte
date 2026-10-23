@@ -1,53 +1,52 @@
 <script lang="ts">
   /**
-   * NaskahCanvas — the A4 "paper" the manuscript is typed on.
+   * NaskahCanvas — the "paper" the manuscript is typed on.
    *
-   * It owns the `contentEditable` region and everything page-level: page size,
-   * margins, zoom, and the page-break visual. Formatting *commands* live in
-   * the parent page + ribbon; this component only:
+   * It owns the `contentEditable` region and everything page-level: paper size,
+   * orientation, margins, columns, page colour, page borders, watermark and the
+   * header/footer bands. Formatting *commands* live in the parent page + ribbon;
+   * this component only:
    *   • keeps the DOM in sync with the `html` prop (without clobbering the
    *     caret while the user types),
    *   • reports edits upward,
-   *   • exposes `focus()` so the ribbon can return the caret.
+   *   • exposes `focus()` / `getEl()` so commands can target the canvas.
    */
   import { onMount } from 'svelte';
   import type { TextStats } from './commands';
   import { textStats, selectionIn } from './commands';
-
-  interface PageSetup {
-    width: number; // px at 96dpi
-    minHeight: number;
-    marginY: number;
-    marginX: number;
-    fontFamily: string;
-    fontSize: number; // pt
-    lineHeight: number;
-  }
+  import type { SectionSetup } from './pageSetup';
+  import { footerMarkup, headerMarkup, pageDimensions, paperStyle, watermarkMarkup } from './pageSetup';
 
   interface Props {
     html: string;
     zoom?: number;
     /** Reading mode: drop the paper chrome and present a clean, wide column. */
     reading?: boolean;
-    setup?: Partial<PageSetup>;
+    section: SectionSetup;
+    /** Number of sheets shown side by side (1 = single page, 2 = book view). */
+    pageView?: 1 | 2;
+    /** Show ruler ticks above the paper. */
+    ruler?: boolean;
+    /** Show the non-printing formatting marks. */
+    showMarks?: boolean;
     onchange?: (html: string, stats: TextStats) => void;
   }
 
-  let { html, zoom = 100, reading = false, setup = {}, onchange }: Props = $props();
+  let {
+    html,
+    zoom = 100,
+    reading = false,
+    section,
+    pageView = 1,
+    ruler = false,
+    showMarks = false,
+    onchange,
+  }: Props = $props();
 
   let editorEl = $state<HTMLElement>();
   let lastSyncedHtml = '';
 
-  const page: PageSetup = $derived({
-    width: 794,
-    minHeight: 1123,
-    marginY: 96,
-    marginX: 96,
-    fontFamily: "'Times New Roman', Georgia, serif",
-    fontSize: 12,
-    lineHeight: 1.5,
-    ...setup,
-  });
+  const dims = $derived(pageDimensions(section));
 
   export function focus() {
     if (!editorEl) return;
@@ -63,13 +62,19 @@
     return editorEl ? textStats(editorEl) : null;
   }
 
+  export function pageCount(): number {
+    if (!editorEl) return 1;
+    const contentHeight = editorEl.scrollHeight;
+    const usable = (dims.height - section.margins.top - section.margins.bottom) * (zoom / 100);
+    const breaks = editorEl.querySelectorAll('.naskah-pagebreak').length;
+    return Math.max(breaks + 1, Math.ceil(contentHeight / Math.max(1, usable)));
+  }
+
   // Sync inbound html → DOM, but only when it genuinely differs from what the
   // user has produced, so typing is never interrupted by a re-render.
   $effect(() => {
     if (!editorEl) return;
     if (html !== lastSyncedHtml && html !== editorEl.innerHTML) {
-      // Preserve caret when the change is external but the region still has
-      // focus (e.g. programmatic undo); otherwise just replace.
       editorEl.innerHTML = html;
       lastSyncedHtml = html;
     }
@@ -107,6 +112,7 @@
     // Drop script/style and every class/id so foreign styling cannot leak.
     doc.querySelectorAll('script,style,meta,link').forEach((n) => n.remove());
     doc.querySelectorAll('*').forEach((el) => {
+      if (el.hasAttribute('data-object') || el.hasAttribute('data-style')) return;
       el.removeAttribute('class');
       el.removeAttribute('id');
       el.removeAttribute('style');
@@ -115,25 +121,47 @@
     });
     return doc.body.innerHTML;
   }
+
+  // Ruler ticks: one mark every simulated centimetre across the page width.
+  const rulerTicks = $derived(
+    Array.from({ length: Math.floor(dims.width / 38) }, (_, i) => i)
+  );
 </script>
 
-<div class="naskah-stage overflow-auto bg-[var(--bg-primary)]" class:reading>
-  <div class="naskah-stage-inner">
+<div class="naskah-stage overflow-auto bg-[var(--bg-primary)]" class:reading class:dark-paper={section.darkPaper}>
+  {#if ruler && !reading}
+    <div class="naskah-ruler" style:width="{dims.width * (zoom / 100)}px">
+      {#each rulerTicks as t}
+        <span class="tick" class:major={t % 5 === 0}>{t % 5 === 0 ? t : ''}</span>
+      {/each}
+    </div>
+  {/if}
+  <div class="naskah-stage-inner" class:book={pageView === 2 && !reading}>
     <div
       class="naskah-paper"
-      style:width="{page.width * (zoom / 100)}px"
-      style:min-height="{reading ? 0 : page.minHeight * (zoom / 100)}px"
-      style:padding={reading
-        ? '2.5rem 1.5rem'
-        : `${page.marginY * (zoom / 100)}px ${page.marginX * (zoom / 100)}px`}
-      style:font-family={page.fontFamily}
-      style:font-size={reading ? `${Math.max(13, page.fontSize)}pt` : `${page.fontSize * (zoom / 100)}pt`}
-      style:line-height={reading ? 1.75 : page.lineHeight}
+      class:show-marks={showMarks}
+      style:width="{dims.width * (zoom / 100)}px"
+      style:min-height="{reading ? 0 : dims.height * (zoom / 100)}px"
+      style:font-size={reading ? `${Math.max(13, 12)}pt` : `${12 * (zoom / 100)}pt`}
+      style:line-height={reading ? 1.75 : undefined}
+      style={reading ? undefined : paperStyle(section)}
     >
-      <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+      {#if section.watermark && !reading}
+        <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+        {@html watermarkMarkup(section)}
+      {/if}
+
+      {#if !reading && (section.header || section.showPageNumbers)}
+        <div class="naskah-hf naskah-header" style:top="{section.headerFromTop * (zoom / 100)}px">
+          <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+          {@html headerMarkup(section)}
+        </div>
+      {/if}
+
       <div
         bind:this={editorEl}
         class="naskah-content"
+        class:draft-view={reading}
         contenteditable="true"
         role="textbox"
         aria-multiline="true"
@@ -142,6 +170,13 @@
         oninput={handleInput}
         onpaste={handlePaste}
       ></div>
+
+      {#if !reading && (section.footer || section.showPageNumbers)}
+        <div class="naskah-hf naskah-footer" style:bottom="{section.footerFromBottom * (zoom / 100)}px">
+          <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+          {@html footerMarkup(section)}
+        </div>
+      {/if}
     </div>
   </div>
 </div>
@@ -153,6 +188,32 @@
     width: 100%;
     height: 100%;
   }
+  .naskah-ruler {
+    position: sticky;
+    top: 0;
+    margin: 0 auto;
+    height: 18px;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: flex-end;
+    z-index: 1;
+    font-size: 8px;
+    color: var(--text-muted);
+    overflow: hidden;
+  }
+  .naskah-ruler .tick {
+    width: 38px;
+    height: 5px;
+    border-left: 1px solid var(--border-color);
+    box-sizing: border-box;
+    text-align: left;
+    padding-left: 2px;
+  }
+  .naskah-ruler .tick.major {
+    height: 10px;
+    border-left-color: var(--text-muted);
+  }
   /* min-width:max-content keeps the centred paper from being *shrunk* by the
      flex/grid alignment when it overflows; combined with margin:auto it stays
      centred when it fits and scrolls from the left edge when it doesn't. */
@@ -162,7 +223,12 @@
     display: flex;
     justify-content: center;
     align-items: flex-start;
+    gap: 1.5rem;
     padding: 1rem;
+  }
+  .naskah-stage-inner.book {
+    justify-content: flex-start;
+    padding-left: 2rem;
   }
   @media (min-width: 768px) {
     .naskah-stage-inner {
@@ -173,6 +239,7 @@
     /* Paper surface follows the active theme so dark mode isn't a blinding
        white rectangle, but text keeps a high-contrast ink colour. */
     flex-shrink: 0;
+    position: relative;
     background: var(--bg-surface);
     color: var(--text-primary);
     box-shadow: 0 8px 40px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--border-color);
@@ -180,12 +247,38 @@
     box-sizing: border-box;
     transition: width 0.12s ease, min-height 0.12s ease;
   }
+  .naskah-stage.dark-paper .naskah-paper {
+    background: #1e1e1e;
+    color: #e6e6e6;
+  }
   .naskah-content {
     outline: none;
     min-height: 100%;
+    position: relative;
+    z-index: 1;
   }
   .naskah-content:focus {
     outline: none;
+  }
+  /* Formatting marks: visible pilcrows, spaces and tabs, Word-style. */
+  .naskah-paper.show-marks .naskah-content :global(p)::after {
+    content: '¶';
+    color: rgba(128, 128, 128, 0.45);
+    margin-left: 2px;
+  }
+  /* Header / footer bands sit in the page margins. */
+  .naskah-hf {
+    position: absolute;
+    left: 0;
+    right: 0;
+    padding: 0 2.5cm;
+    font-size: 0.8em;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    pointer-events: none;
+    z-index: 0;
   }
   /* Reading mode: a wide, shadowless column centred for comfortable reading —
      the page-break markers are hidden because pagination is irrelevant here. */
@@ -250,6 +343,10 @@
   .naskah-content :global(ol) {
     list-style: decimal;
   }
+  .naskah-content :global(ul[data-list='check']) {
+    list-style: none;
+    padding-left: 0.6em;
+  }
   .naskah-content :global(a) {
     color: var(--accent-primary);
     text-decoration: underline;
@@ -274,6 +371,10 @@
   .naskah-content :global(th) {
     background: var(--bg-elevated);
     font-weight: 700;
+  }
+  /* Banded rows, applied when a table style turns striping on. */
+  .naskah-content :global(table[data-banded] tbody tr:nth-child(even)) {
+    background: rgba(128, 128, 128, 0.08);
   }
   .naskah-content :global(hr) {
     border: 0;
