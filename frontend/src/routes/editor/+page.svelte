@@ -63,6 +63,20 @@
   import * as review from '$lib/editor/review';
   import type { Comment, InspectionFinding } from '$lib/editor/review';
   import { parseCsv, mergePlaceholder, mergeAll, labelSheet } from '$lib/editor/mailings';
+  import {
+    HORIZONTAL_LINES,
+    LIST_GALLERY,
+    DEFAULT_AUTOTEXT,
+    fieldMarkup,
+    fontwork,
+    horizontalLine,
+    listOf,
+    textFrame,
+  } from '$lib/editor/loBlocks';
+  import type { FieldKind } from '$lib/editor/loBlocks';
+  import { breakMarkup, pageFieldMarkup } from '$lib/editor/loLayout';
+  import type { NumberingContext } from '$lib/editor/loLayout';
+  import { linkMarkup, validateLink } from '$lib/editor/loLinks';
   import type { Recipients, LayoutName } from '$lib/editor/mailings';
   import { downloadDocument, printDocument, readImportedFile } from '$lib/editor/export';
   import type { ExportFormat } from '$lib/editor/export';
@@ -432,6 +446,49 @@
         insert.html(`<a id="${safeAnchor(String(payload.name))}" data-object="bookmark"></a>`);
         dialog = null;
         break;
+      case 'autotext': {
+        const entry = DEFAULT_AUTOTEXT.find((a) => a.key === payload.key);
+        if (entry) insert.html(entry.html);
+        dialog = null;
+        break;
+      }
+      case 'field':
+        insertWriterField(payload.field as FieldKind);
+        dialog = null;
+        break;
+      case 'textframe':
+        insert.html(
+          textFrame(String(payload.text), {
+            anchor: payload.anchor as never,
+            wrap: payload.wrap as never,
+            width: '240px',
+            align: 'left',
+          })
+        );
+        dialog = null;
+        break;
+      case 'hyperwriter': {
+        const model = {
+          kind: payload.kind as never,
+          text: String(payload.text ?? ''),
+          target: String(payload.target ?? ''),
+          name: String(payload.name ?? ''),
+          newWindow: true,
+          bookmark: String(payload.bookmark ?? ''),
+        };
+        const problem = validateLink(model);
+        if (problem) {
+          notify.warning(problem);
+          break;
+        }
+        insert.html(linkMarkup(model));
+        dialog = null;
+        break;
+      }
+      case 'fontwork':
+        insert.html(fontwork(String(payload.text), payload.style as never));
+        dialog = null;
+        break;
     }
     refreshStats();
   }
@@ -612,6 +669,19 @@
     add('review.acceptAll', 'Terima semua perubahan', 'Review', 'Lacak Perubahan', acceptAllRevisions);
     add('review.rejectAll', 'Tolak semua perubahan', 'Review', 'Lacak Perubahan', rejectAllRevisions);
     add('view.readMode', 'Mode baca', 'View', 'Tampilan', () => (readingMode = !readingMode));
+    // LibreOffice Writer commands
+    add('tools.autotext', 'AutoText', 'Format', 'Gaya & AutoText', () => (dialog = 'autotext'), { keywords: ['autotext', 'blok'] });
+    add('insert.field', 'Sisipkan field', 'Format', 'Gaya & AutoText', () => (dialog = 'field'), { keywords: ['field', 'medan'] });
+    add('insert.pageNumber', 'Nomor halaman di teks', 'Format', 'Gaya & AutoText', insertPageField);
+    add('insert.textFrame', 'Teks berjalan (bingkai)', 'Format', 'Bingkai & Objek', () => (dialog = 'textframe'), { keywords: ['bingkai', 'frame'] });
+    add('insert.fontwork', 'Fontwork', 'Format', 'Bingkai & Objek', () => (dialog = 'fontwork'));
+    add('insert.hyperlinkWriter', 'Hyperlink Writer', 'Format', 'Bingkai & Objek', () => (dialog = 'hyperwriter'));
+    add('layout.breaks', 'Pemisah halaman/kolom/bagian', 'Format', 'Sisipkan', () => {
+      insert.html(breakMarkup('page'));
+      refreshStats();
+    }, {
+      keywords: ['break', 'pemisah'],
+    });
     add('view.navigationPane', 'Panel navigasi', 'View', 'Tampilan', () => (showNavPane = !showNavPane));
     add('view.ruler', 'Penggaris', 'View', 'Tampilan', () => (showRuler = !showRuler));
     add('view.marks', 'Tanda format', 'View', 'Tampilan', () => (showMarks = !showMarks));
@@ -655,6 +725,24 @@
   function setSpacing(preset: SectionSetup['paragraphSpacing']) {
     section = { ...section, paragraphSpacing: preset };
     saveSection(section);
+  }
+
+  // ── Writer-scoped insertions ────────────────────────────────────────────
+  function numberingContext(): NumberingContext {
+    return { format: section.pageNumberFormat, start: 1 };
+  }
+  function insertPageField() {
+    insert.html(pageFieldMarkup(numberingContext(), 1));
+    refreshStats();
+  }
+  function insertListFromGallery(key: string) {
+    const style = LIST_GALLERY.find((g) => g.key === key) ?? LIST_GALLERY[0];
+    insert.html(listOf(style));
+    refreshStats();
+  }
+  function insertWriterField(kind: FieldKind) {
+    insert.html(fieldMarkup(kind, { author: properties.author, title: docTitle, wordCount: stats.words }));
+    refreshStats();
   }
   function applyDocStyle(style: DocStyle) {
     applyStyle(style);
@@ -900,6 +988,16 @@
       onorientation={toggleOrientation}
       oncolumns={setColumns}
       onequestyle={applyDocStyle}
+      onautotext={() => (dialog = 'autotext')}
+      onfield={() => (dialog = 'field')}
+      ontextframe={() => (dialog = 'textframe')}
+      onwriterdialog={() => (dialog = 'hyperwriter')}
+      onfontwork={() => (dialog = 'fontwork')}
+      onlistgallery={(key) => insertListFromGallery(key)}
+      onhorizontalline={(key) => { insert.html(horizontalLine(key as never)); refreshStats(); }}
+      oninsertbreak={(kind) => { insert.html(breakMarkup(kind)); refreshStats(); }}
+      oncolumnspreset={(n) => setColumns(n)}
+      onpagefield={() => insertPageField()}
     />
 
     {#if showMailings}

@@ -22,6 +22,7 @@
   import { charFx, encloseSelection } from './charFx';
   import { paraFx } from './paraFx';
   import { tableTools } from './tableTools';
+  import { HORIZONTAL_LINES, LIST_GALLERY, listStart } from './loBlocks';
   import type { EditorStateSnapshot } from './editorState';
   import type { DocStyle } from './styles';
   import {
@@ -133,12 +134,14 @@
     Baseline as BaselineIcon,
     Grid3X3,
     ListCollapse,
+    ListRestart,
     ListChevronsUpDown,
     Hash as HashIcon,
   } from 'lucide-svelte';
 
   type Tab =
     | 'Home'
+    | 'Format'
     | 'Insert'
     | 'Design'
     | 'Layout'
@@ -207,6 +210,17 @@
     ontogglenavpane: () => void;
     ontoggleruler: () => void;
     ontogglemarks: () => void;
+    // LibreOffice Writer tab
+    onautotext: () => void;
+    onfield: () => void;
+    ontextframe: () => void;
+    onwriterdialog: () => void;
+    onfontwork: () => void;
+    onlistgallery: (style: string) => void;
+    onhorizontalline: (key: string) => void;
+    oninsertbreak: (kind: 'page' | 'column' | 'section') => void;
+    oncolumnspreset: (n: number) => void;
+    onpagefield: () => void;
     onpageview: () => void;
     onpagecolor: (color: string) => void;
     ontoggletoc: () => void;
@@ -278,6 +292,16 @@
     ontogglenavpane,
     ontoggleruler,
     ontogglemarks,
+    onautotext,
+    onfield,
+    ontextframe,
+    onwriterdialog,
+    onfontwork,
+    onlistgallery,
+    onhorizontalline,
+    oninsertbreak,
+    oncolumnspreset,
+    onpagefield,
     onpageview,
     onpagecolor,
     ontoggletoc,
@@ -296,6 +320,7 @@
   type IconCtor = typeof Type;
   const tabs: { name: Tab; icon: IconCtor }[] = [
     { name: 'Home', icon: Type },
+    { name: 'Format', icon: Paintbrush },
     { name: 'Insert', icon: Table },
     { name: 'Design', icon: Palette },
     { name: 'Layout', icon: Columns3 },
@@ -599,6 +624,60 @@
           <RibbonButton title="Cari sebelumnya" onclick={() => onfindnext(true)}><ChevronUp class="w-4 h-4" /></RibbonButton>
           <RibbonButton title="Cari berikutnya (Ctrl+G)" onclick={() => onfindnext(false)}><ChevronDown class="w-4 h-4" /></RibbonButton>
           <RibbonButton title="Pilih semua (Ctrl+A)" onclick={() => run(history.selectAll)}><Grid3x3 class="w-4 h-4" /></RibbonButton>
+        </RibbonGroup>
+      {/if}
+
+      {#if shownTab === 'Format'}
+        <RibbonGroup label="Gaya & AutoText">
+          <RibbonButton title="AutoText (Ctrl+F3)" onclick={onautotext}><FileText class="w-4 h-4" /><span class="text-[10px] font-code">AutoText</span></RibbonButton>
+          <RibbonButton title="Sisipkan field" onclick={onfield}><Hash class="w-4 h-4" /><span class="text-[10px] font-code">Field</span></RibbonButton>
+          <RibbonButton title="Nomor halaman di teks" onclick={onpagefield}><HashIcon class="w-4 h-4" /><span class="text-[10px] font-code">No. Hlm</span></RibbonButton>
+          <RibbonButton title="Bersihkan format langsung" onclick={() => run(fmt.clear)}><RemoveFormatting class="w-4 h-4" /><span class="text-[10px] font-code">Default</span></RibbonButton>
+        </RibbonGroup>
+
+        <RibbonGroup label="Bingkai & Objek">
+          <RibbonButton title="Teks berjalan (bingkai)" onclick={ontextframe}><SquareDashedBottomCode class="w-4 h-4" /><span class="text-[10px] font-code">Bingkai</span></RibbonButton>
+          <RibbonButton title="Fontwork" onclick={onfontwork}><TypeOutline class="w-4 h-4" /><span class="text-[10px] font-code">Fontwork</span></RibbonButton>
+          <RibbonButton title="Hyperlink Writer" onclick={onwriterdialog}><LinkIcon class="w-4 h-4" /><span class="text-[10px] font-code">Tautan</span></RibbonButton>
+        </RibbonGroup>
+
+        <RibbonGroup label="Daftar">
+          <div class="relative" data-popover>
+            <RibbonButton title="Galeri daftar" onclick={() => pick('lo-list')}><ListTree class="w-4 h-4" /><span class="text-[10px] font-code">Galeri</span></RibbonButton>
+            {#if popover === 'lo-list'}
+              <div class="absolute z-30 mt-1 p-1 bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-sm shadow-lg grid grid-cols-2 gap-1 text-[11px]">
+                {#each LIST_GALLERY as g}
+                  <button type="button" onmousedown={(e) => { e.preventDefault(); onlistgallery(g.key); popover = null; }} class="text-left px-2 py-1 rounded-sm hover:bg-[var(--bg-surface)] text-[var(--text-primary)]">{g.label}</button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+          <RibbonButton title="Mulai ulang penomoran dari 1" onclick={() => run(() => listStart(1))}><ListRestart class="w-4 h-4" /><span class="text-[10px] font-code">Ulang</span></RibbonButton>
+        </RibbonGroup>
+
+        <RibbonGroup label="Garis">
+          <div class="relative" data-popover>
+            <RibbonButton title="Galeri garis horizontal" onclick={() => pick('lo-line')}><Minus class="w-4 h-4" /><span class="text-[10px] font-code">Garis</span></RibbonButton>
+            {#if popover === 'lo-line'}
+              <div class="absolute z-30 mt-1 p-1 bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-sm shadow-lg flex flex-col text-[11px] w-40">
+                {#each HORIZONTAL_LINES as l}
+                  <button type="button" onmousedown={(e) => { e.preventDefault(); onhorizontalline(l.key); popover = null; }} class="text-left px-2 py-1 rounded-sm hover:bg-[var(--bg-surface)] text-[var(--text-primary)]">{l.label}</button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </RibbonGroup>
+
+        <RibbonGroup label="Sisipkan">
+          <RibbonButton title="Pemisah halaman" onclick={() => oninsertbreak('page')}><FileDown class="w-4 h-4" /><span class="text-[10px] font-code">Halaman</span></RibbonButton>
+          <RibbonButton title="Pemisah kolom" onclick={() => oninsertbreak('column')}><Columns3 class="w-4 h-4" /><span class="text-[10px] font-code">Kolom</span></RibbonButton>
+          <RibbonButton title="Pemisah bagian" onclick={() => oninsertbreak('section')}><SquareDashedBottomCode class="w-4 h-4" /><span class="text-[10px] font-code">Bagian</span></RibbonButton>
+        </RibbonGroup>
+
+        <RibbonGroup label="Kolom Halaman">
+          <RibbonButton title="Satu kolom" onclick={() => oncolumnspreset(1)}><Columns2 class="w-4 h-4" /><span class="text-[10px] font-code">1</span></RibbonButton>
+          <RibbonButton title="Dua kolom" onclick={() => oncolumnspreset(2)}><Columns2 class="w-4 h-4" /><span class="text-[10px] font-code">2</span></RibbonButton>
+          <RibbonButton title="Tiga kolom" onclick={() => oncolumnspreset(3)}><Columns3 class="w-4 h-4" /><span class="text-[10px] font-code">3</span></RibbonButton>
         </RibbonGroup>
       {/if}
 

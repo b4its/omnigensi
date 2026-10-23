@@ -12,6 +12,9 @@
   import type { Source, CitationStyle } from './references';
   import { EQUATION_PRESETS } from './insertBlocks';
   import { SYMBOL_SETS } from './insertBlocks';
+  import { DEFAULT_AUTOTEXT } from './loBlocks';
+  import type { Anchor, Wrap } from './loBlocks';
+  import type { LinkKind } from './loLinks';
   import { PAGE_NUMBER_FORMATS, PAPER_SIZES } from './pageSetup';
   import { Plus, Trash2, Search, ChevronLeft, ChevronRight } from 'lucide-svelte';
 
@@ -41,7 +44,12 @@
     | 'tableborders'
     | 'pictureformat'
     | 'wordcount'
-    | 'inspect';
+    | 'inspect'
+    | 'autotext'
+    | 'field'
+    | 'textframe'
+    | 'hyperwriter'
+    | 'fontwork';
 
   interface Props {
     kind: DialogKind;
@@ -133,6 +141,15 @@
   let crossrefTarget = $state('');
   let commentText = $state('');
   let textboxText = $state('Teks kotak');
+  // LibreOffice Writer dialogs
+  let autotextCat = $state('Semua');
+  let frameAnchor = $state<Anchor>('toParagraph');
+  let frameWrap = $state<Wrap>('right');
+  let linkKind = $state<LinkKind>('internet');
+  let linkTarget = $state('');
+  let linkBookmark = $state('');
+  let linkName = $state('');
+  let fontworkStyle = $state<'arc' | 'circle' | 'wave' | 'slant'>('arc');
   let wordartText = $state('WordArt');
   let signName = $state('Nama');
   let signTitle = $state('Jabatan');
@@ -198,6 +215,11 @@
     pictureformat: 'Format Gambar',
     wordcount: 'Statistik Dokumen',
     inspect: 'Periksa Dokumen',
+    autotext: 'AutoText',
+    field: 'Sisipkan Field',
+    textframe: 'Teks Berjalan (Bingkai)',
+    hyperwriter: 'Hyperlink',
+    fontwork: 'Fontwork',
   };
 
   const inputClass =
@@ -545,6 +567,89 @@
         {/each}
       </ul>
     {/if}
+  {:else if kind === 'autotext'}
+    <div class="flex flex-wrap gap-1 mb-2">
+      {#each ['Semua', ...new Set(DEFAULT_AUTOTEXT.map((a) => a.category))] as cat}
+        <button type="button" onclick={() => (autotextCat = cat)} class="px-2 py-0.5 text-[10px] font-code border rounded-sm {autotextCat === cat ? 'border-[var(--accent-primary)] text-[var(--accent-primary)]' : 'border-[var(--border-color)] text-[var(--text-primary)]'}">{cat}</button>
+      {/each}
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-1 max-h-64 overflow-y-auto">
+      {#each DEFAULT_AUTOTEXT.filter((a) => autotextCat === 'Semua' || a.category === autotextCat) as entry (entry.key)}
+        <button type="button" onclick={() => onsubmit('autotext', { key: entry.key })} class="text-left px-2 py-1 border border-[var(--border-color)] rounded-sm hover:border-[var(--accent-primary)] hover:bg-[var(--bg-elevated)]">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] text-[var(--text-primary)]">{entry.label}</span>
+            <span class="text-[9px] font-code text-[var(--accent-primary)]">{entry.key}</span>
+          </div>
+          <div class="text-[9px] font-code text-[var(--text-muted)] truncate">{entry.category}</div>
+        </button>
+      {/each}
+    </div>
+  {:else if kind === 'field'}
+    <div class="grid grid-cols-2 gap-1">
+      {#each [['insertedBy', 'Disisipkan oleh'], ['author', 'Penulis'], ['createdOn', 'Tanggal dibuat'], ['modifiedOn', 'Tanggal diubah'], ['pageNumber', 'Nomor halaman'], ['totalPages', 'Jumlah halaman'], ['wordCount', 'Jumlah kata'], ['title', 'Judul dokumen'], ['fileName', 'Nama berkas']] as [k, label]}
+        <button type="button" onclick={() => onsubmit('field', { field: k })} class={btnGhost}>{label}</button>
+      {/each}
+    </div>
+  {:else if kind === 'textframe'}
+    <label class={labelClass} for="d-tf">Isi bingkai</label>
+    <textarea id="d-tf" bind:value={textboxText} rows="2" class="{inputClass} mb-2"></textarea>
+    <div class="grid grid-cols-2 gap-2 mb-2">
+      <div>
+        <label class={labelClass} for="d-tfa">Jangkar</label>
+        <select id="d-tfa" bind:value={frameAnchor} class={inputClass}>
+          <option value="toParagraph">Ke paragraf</option>
+          <option value="toCharacter">Ke karakter</option>
+          <option value="toPage">Ke halaman</option>
+          <option value="asCharacter">Sebagai karakter</option>
+        </select>
+      </div>
+      <div>
+        <label class={labelClass} for="d-tfw">Bungkus teks</label>
+        <select id="d-tfw" bind:value={frameWrap} class={inputClass}>
+          <option value="none">Tanpa</option>
+          <option value="left">Kiri</option>
+          <option value="right">Kanan</option>
+          <option value="both">Kedua sisi</option>
+        </select>
+      </div>
+    </div>
+    <div class="flex justify-end gap-2">
+      <button type="button" onclick={onexit} class={btnGhost}>BATAL</button>
+      <button type="button" onclick={() => onsubmit('textframe', { text: textboxText, anchor: frameAnchor, wrap: frameWrap })} class={btnPrimary}>SISIPKAN</button>
+    </div>
+  {:else if kind === 'hyperwriter'}
+    <div class="flex gap-1 mb-2">
+      {#each [['internet', 'Internet'], ['mail', 'Surel'], ['document', 'Dokumen'], ['newDocument', 'Dokumen Baru']] as [k, label]}
+        <button type="button" onclick={() => (linkKind = k as typeof linkKind)} class="px-2 py-1 text-[10px] font-code border rounded-sm {linkKind === k ? 'border-[var(--accent-primary)] text-[var(--accent-primary)]' : 'border-[var(--border-color)] text-[var(--text-primary)]'}">{label}</button>
+      {/each}
+    </div>
+    {#if linkKind === 'document'}
+      <label class={labelClass} for="d-hwd">Tujuan (judul/penanda)</label>
+      <select id="d-hwd" bind:value={linkBookmark} class="{inputClass} mb-2">
+        <option value="">— pilih tujuan —</option>
+        {#each headings as h}<option value={h.id}>{h.text}</option>{/each}
+      </select>
+    {:else}
+      <label class={labelClass} for="d-hwt">Tujuan</label>
+      <input id="d-hwt" bind:value={linkTarget} class="{inputClass} mb-2" placeholder={linkKind === 'mail' ? 'nama@contoh.id' : 'https://'} />
+    {/if}
+    <label class={labelClass} for="d-hwtext">Teks</label>
+    <input id="d-hwtext" bind:value={linkLabel} class="{inputClass} mb-2" />
+    <label class={labelClass} for="d-hwname">Nama (target)</label>
+    <input id="d-hwname" bind:value={linkName} class="{inputClass} mb-3" placeholder="opsional" />
+    <div class="flex justify-end gap-2">
+      <button type="button" onclick={onexit} class={btnGhost}>BATAL</button>
+      <button type="button" onclick={() => onsubmit('hyperwriter', { kind: linkKind, target: linkTarget, text: linkLabel, name: linkName, bookmark: linkBookmark })} class={btnPrimary}>TERAPKAN</button>
+    </div>
+  {:else if kind === 'fontwork'}
+    <label class={labelClass} for="d-fw">Teks Fontwork</label>
+    <input id="d-fw" bind:value={wordartText} class="{inputClass} mb-2" />
+    <div class="flex gap-1 mb-3">
+      {#each [['arc', 'Busur'], ['circle', 'Lingkaran'], ['wave', 'Gelombang'], ['slant', 'Miring']] as [k, label]}
+        <button type="button" onclick={() => (fontworkStyle = k as typeof fontworkStyle)} class="px-2 py-1 text-[11px] border rounded-sm {fontworkStyle === k ? 'border-[var(--accent-primary)] text-[var(--accent-primary)]' : 'border-[var(--border-color)] text-[var(--text-primary)]'}">{label}</button>
+      {/each}
+    </div>
+    <button type="button" onclick={() => onsubmit('fontwork', { text: wordartText, style: fontworkStyle })} class={btnPrimary}>SISIPKAN</button>
   {/if}
 </EditorDialog>
 
