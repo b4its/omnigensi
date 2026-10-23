@@ -11,7 +11,25 @@
 import { currentBlock } from './commands';
 
 /** The `<table>` under the caret. */
+/**
+ * The `<table>` under the caret.
+ *
+ * `currentBlock()` only knows paragraph-ish blocks, so it returns null inside a
+ * cell; walk up from the caret's element instead, which also covers the case
+ * where the selection anchor is a text node inside `<td>`.
+ */
 export function activeTable(): HTMLTableElement | null {
+	const sel = window.getSelection();
+	let node: Node | null = sel?.anchorNode ?? null;
+	while (node) {
+		if (node.nodeType === Node.ELEMENT_NODE) {
+			const el = node as HTMLElement;
+			if (el.tagName === 'TABLE') return el as HTMLTableElement;
+			const table = el.closest?.('table');
+			if (table) return table as HTMLTableElement;
+		}
+		node = node.parentNode;
+	}
 	return (currentBlock()?.closest('table') as HTMLTableElement | null) ?? null;
 }
 
@@ -30,28 +48,77 @@ export function activeCell(): HTMLTableCellElement | null {
 	return null;
 }
 
-/** The bounding box of the selected cells inside the active table. */
+/** Index of `cell` inside its own row (TD/TH children only). */
+function cellColumn(cell: HTMLTableCellElement): number {
+	const row = cell.parentElement as HTMLTableRowElement | null;
+	if (!row) return 0;
+	return Array.from(row.children).indexOf(cell);
+}
+
+/**
+ * The bounding box of the selected cells inside the active table.
+ *
+ * Uses explicit row/column geometry derived from container ancestry and child
+ * order. `Range.intersectsNode` is deliberately avoided: its result for table
+ * cells differs between engines and even between document-owned and
+ * selection-owned ranges, which made multi-cell operations unreliable.
+ */
 export function selectionBox(): { table: HTMLTableElement; rows: number[]; cols: number[] } | null {
 	const table = activeTable();
 	const cell = activeCell();
 	if (!table || !cell) return null;
+
 	const sel = window.getSelection();
 	const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
-	const cells: HTMLTableCellElement[] = [];
-	for (const el of Array.from(table.querySelectorAll<HTMLTableCellElement>('td,th'))) {
-		if (!range || range.intersectsNode(el) || el === cell) cells.push(el);
+	const anchors: HTMLTableCellElement[] = [cell];
+	if (range) {
+		const startCell = closestCell(range.startContainer);
+		const endCell = closestCell(range.endContainer);
+		if (startCell && startCell.closest('table') === table) anchors.push(startCell);
+		if (endCell && endCell.closest('table') === table) anchors.push(endCell);
 	}
-	const rowSet = new Set<number>();
-	const colSet = new Set<number>();
-	for (const c of cells) {
-		rowSet.add(c.parentElement ? (c.parentElement as HTMLTableRowElement).rowIndex : 0);
-		colSet.add(c.cellIndex);
+
+	const rows: number[] = [];
+	const cols: number[] = [];
+	for (const c of anchors) {
+		const rowIndex = (c.parentElement as HTMLTableRowElement).rowIndex;
+		const colIndex = cellColumn(c);
+		rows.push(rowIndex);
+		cols.push(colIndex);
 	}
-	if (cells.length === 1 && cell) {
-		rowSet.add((cell.parentElement as HTMLTableRowElement).rowIndex);
-		colSet.add(cell.cellIndex);
+
+	const minRow = Math.min(...rows);
+	const maxRow = Math.max(...rows);
+	const minCol = Math.min(...cols);
+	const maxCol = Math.max(...cols);
+	if (minRow === maxRow && minCol === maxCol) {
+		return { table, rows: [minRow], cols: [minCol] };
 	}
-	return { table, rows: [...rowSet].sort((a, b) => a - b), cols: [...colSet].sort((a, b) => a - b) };
+
+	const rowRange: number[] = [];
+	const colRange: number[] = [];
+	for (let r = minRow; r <= maxRow; r++) rowRange.push(r);
+	for (let c = minCol; c <= maxCol; c++) colRange.push(c);
+
+	// Only keep rows/columns that actually contain a cell in the span, so a
+	// selection brushing a colspan boundary cannot invent empty columns.
+	const validCols = colRange.filter((c) =>
+		rowRange.some((r) => table.rows[r]?.children[c])
+	);
+	return { table, rows: rowRange, cols: validCols.length ? validCols : [minCol] };
+}
+
+/** The nearest TD/TH ancestor (or self) of a node. */
+function closestCell(node: Node | null): HTMLTableCellElement | null {
+	let n: Node | null = node;
+	while (n) {
+		if (n.nodeType === Node.ELEMENT_NODE) {
+			const el = n as HTMLElement;
+			if (el.tagName === 'TD' || el.tagName === 'TH') return el as HTMLTableCellElement;
+		}
+		n = n.parentNode;
+	}
+	return null;
 }
 
 export const tableTools = {
@@ -62,25 +129,21 @@ export const tableTools = {
 		const { table, rows, cols } = box;
 		const top = rows[0];
 		const left = cols[0];
-		let html = '';
-		for (const r of rows) {
-			const row = table.rows[r];
-			for (const c of cols) {
-				const cell = row.cells[c];
-				if (cell) html += cell.innerHTML + ' ';
-			}
-		}
-		const anchor = table.rows[top]?.cells[left];
+		// Resolve every cell *before* mutating: HTMLTableRowElement.cells is a
+		// live collection, so removing during iteration skips cells.
+		const targets = rows.flatMap((r) =>
+			cols
+				.map((c) => table.rows[r]?.children[c] as HTMLTableCellElement | undefined)
+				.filter((cell): cell is HTMLTableCellElement => !!cell)
+		);
+		const anchor = table.rows[top]?.children[left] as HTMLTableCellElement | undefined;
 		if (!anchor) return;
+		const content = targets.map((cell) => cell.innerHTML.trim()).filter(Boolean).join(' ');
 		anchor.rowSpan = rows.length;
 		anchor.colSpan = cols.length;
-		anchor.innerHTML = html.trim();
-		for (const r of rows) {
-			const row = table.rows[r];
-			for (const c of cols) {
-				if (r === top && c === left) continue;
-				row.cells[c]?.remove();
-			}
+		anchor.innerHTML = content || '&nbsp;';
+		for (const cell of targets) {
+			if (cell !== anchor) cell.remove();
 		}
 	},
 
@@ -155,9 +218,13 @@ export const tableTools = {
 		if (cell) {
 			const box = selectionBox();
 			const cells = box
-				? box.rows.flatMap((r) => box.cols.map((c) => table.rows[r]?.cells[c]).filter(Boolean))
+				? box.rows.flatMap((r) =>
+						box.cols
+							.map((c) => table.rows[r]?.children[c] as HTMLTableCellElement | undefined)
+							.filter((x): x is HTMLTableCellElement => !!x)
+					)
 				: [cell];
-			for (const c of cells) if (c) c.style.background = color;
+			for (const c of cells) c.style.background = color;
 		} else {
 			table.style.background = color;
 		}

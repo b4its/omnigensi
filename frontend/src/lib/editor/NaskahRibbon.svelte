@@ -335,16 +335,34 @@
   // table or picture while a non-contextual tab is active — never overwrite an
   // explicit choice, or the contextual tools become unreachable.
   let shownTab = $state<Tab>('Home');
+  // Declared before the effect so it never runs with an uninitialised binding.
+  let tableDismissed = $state(false);
+  let pictureDismissed = $state(false);
+  // The page tracks the context on selectionchange, but the ribbon also derives
+  // it from the live selection so the contextual tab appears even between
+  // selectionchange ticks (e.g. right after an insertion).
+  const tableContext = $derived.by(() => {
+    void revision;
+    if (inTable) return true;
+    const sel = typeof window === 'undefined' ? null : window.getSelection();
+    let node: Node | null = sel?.anchorNode ?? null;
+    while (node) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const tag = (node as Element).tagName;
+        if (tag === 'TD' || tag === 'TH' || tag === 'TABLE') return true;
+      }
+      node = node.parentNode;
+    }
+    return false;
+  });
   $effect(() => {
-    if (inTable && (shownTab === 'Home' || shownTab === 'Insert') && !tableDismissed) {
+    if (tableContext && (shownTab === 'Home' || shownTab === 'Insert') && !tableDismissed) {
       shownTab = 'Table';
     }
     if (inPicture && !pictureDismissed) {
       shownTab = 'Picture';
     }
   });
-  let tableDismissed = $state(false);
-  let pictureDismissed = $state(false);
 
   // Popover visibility, all closed on outside mousedown like Word's menus.
   let popover = $state<string | null>(null);
@@ -432,10 +450,17 @@
       {/each}
       {#if shownTab === 'Table' || shownTab === 'Picture'}
         <span class="mx-1 h-5 w-px bg-[var(--border-color)]"></span>
-        <span class="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-hud tracking-wider text-[var(--accent-secondary)] bg-[var(--bg-elevated)]/40 rounded-t-sm whitespace-nowrap">
-          <Table class="w-3.5 h-3.5" />
-          {#if shownTab === 'Table'}TABEL{:else}GAMBAR{/if}
-        </span>
+        <button
+          type="button"
+          title={shownTab === 'Table' ? 'Alat tabel' : 'Alat gambar'}
+          onmousedown={(e) => {
+            e.preventDefault();
+            popover = null;
+          }}
+          class="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-hud tracking-wider text-[var(--accent-primary)] bg-[var(--accent-primary)]/15 border-b-2 border-[var(--accent-primary)] rounded-t-sm whitespace-nowrap"
+        >
+          {#if shownTab === 'Table'}<Table class="w-3.5 h-3.5" /> TABEL{:else}<ImageIcon class="w-3.5 h-3.5" /> GAMBAR{/if}
+        </button>
       {/if}
       <div class="flex-1"></div>
       <button
