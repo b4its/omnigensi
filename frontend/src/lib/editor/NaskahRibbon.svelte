@@ -13,7 +13,7 @@
    */
   import RibbonGroup from './RibbonGroup.svelte';
   import RibbonButton from './RibbonButton.svelte';
-  import { fmt, para, insert, history, isBlock } from './commands';
+  import { fmt, para, insert, history, isBlock, table } from './commands';
   import type { Align } from './commands';
   import {
     Bold,
@@ -62,6 +62,16 @@
     Copy,
     Clipboard,
     BookOpen,
+    Rows3,
+    Plus,
+    Trash2,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    CalendarClock,
+    ChevronUp,
+    ChevronDown,
   } from 'lucide-svelte';
 
   interface Props {
@@ -77,7 +87,9 @@
     onprint: () => void;
     oninsertlink: () => void;
     oninsertimage: () => void;
+    oninsertdatetime: () => void;
     onfind: () => void;
+    onfindnext: (backward: boolean) => void;
     onzoom: (zoom: number) => void;
     onpagemargin: (marginY: number) => void;
     onpagewidth: (width: number) => void;
@@ -98,7 +110,9 @@
     onprint,
     oninsertlink,
     oninsertimage,
+    oninsertdatetime,
     onfind,
+    onfindnext,
     onzoom,
     onpagemargin,
     onpagewidth,
@@ -465,6 +479,12 @@
         <RibbonButton title="Find & replace (Ctrl+F)" onclick={onfind}>
           <Search class="w-4 h-4" />
         </RibbonButton>
+        <RibbonButton title="Find previous" onclick={() => onfindnext(true)}>
+          <ChevronUp class="w-4 h-4" />
+        </RibbonButton>
+        <RibbonButton title="Find next (Ctrl+G)" onclick={() => onfindnext(false)}>
+          <ChevronDown class="w-4 h-4" />
+        </RibbonButton>
       </RibbonGroup>
     {/if}
 
@@ -502,6 +522,33 @@
             </div>
           {/if}
         </div>
+      </RibbonGroup>
+
+      <RibbonGroup label="Table Tools">
+        <RibbonButton title="Add row above" onclick={() => run(table.addRowAbove)}>
+          <Rows3 class="w-4 h-4" />
+          <ArrowUp class="w-3 h-3" />
+        </RibbonButton>
+        <RibbonButton title="Add row below" onclick={() => run(table.addRowBelow)}>
+          <Rows3 class="w-4 h-4" />
+          <ArrowDown class="w-3 h-3" />
+        </RibbonButton>
+        <RibbonButton title="Add column left" onclick={() => run(table.addColumnLeft)}>
+          <Columns3 class="w-4 h-4" />
+          <ArrowLeft class="w-3 h-3" />
+        </RibbonButton>
+        <RibbonButton title="Add column right" onclick={() => run(table.addColumnRight)}>
+          <Columns3 class="w-4 h-4" />
+          <ArrowRight class="w-3 h-3" />
+        </RibbonButton>
+        <RibbonButton title="Delete row" onclick={() => run(table.deleteRow)}>
+          <Trash2 class="w-4 h-4" />
+          <Rows3 class="w-3 h-3" />
+        </RibbonButton>
+        <RibbonButton title="Delete column" onclick={() => run(table.deleteColumn)}>
+          <Trash2 class="w-4 h-4" />
+          <Columns3 class="w-3 h-3" />
+        </RibbonButton>
       </RibbonGroup>
 
       <RibbonGroup label="Illustrations">
@@ -543,6 +590,10 @@
         </RibbonButton>
         <RibbonButton title="Bullet •" onclick={() => run(() => insert.text('•'))}>
           <span class="text-[12px]">•</span>
+        </RibbonButton>
+        <RibbonButton title="Insert date & time" onclick={oninsertdatetime}>
+          <CalendarClock class="w-4 h-4" />
+          <span class="text-[11px] font-code">Tanggal</span>
         </RibbonButton>
       </RibbonGroup>
     {/if}

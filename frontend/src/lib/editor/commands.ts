@@ -254,6 +254,173 @@ export function replaceAll(root: HTMLElement, find: string, replace: string): Re
 	return { count };
 }
 
+/**
+ * Find the next (or previous) occurrence of `find` and select it, so the caret
+ * jumps to the match and the browser scrolls it into view. `backward` reverses
+ * the direction. Returns true when a match was found and selected.
+ */
+export function findNext(root: HTMLElement, find: string, backward = false): boolean {
+	if (!find) return false;
+	const matches: Range[] = [];
+	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+	let node: Node | null;
+	const lower = find.toLowerCase();
+	while ((node = walker.nextNode())) {
+		const text = node.nodeValue ?? '';
+		if (!text) continue;
+		const hay = text.toLowerCase();
+		let idx = hay.indexOf(lower);
+		while (idx !== -1) {
+			const range = document.createRange();
+			range.setStart(node, idx);
+			range.setEnd(node, idx + find.length);
+			matches.push(range);
+			idx = hay.indexOf(lower, idx + find.length);
+		}
+	}
+	if (matches.length === 0) return false;
+
+	const sel = window.getSelection();
+	if (!sel) return false;
+
+	// Pick the match after the current selection (or before, when backward),
+	// wrapping around at either end.
+	let target = matches[0];
+	if (sel.rangeCount > 0 && !sel.isCollapsed) {
+		const cur = sel.getRangeAt(0);
+		if (!backward) {
+			target = matches.find((m) => cur.compareBoundaryPoints(Range.END_TO_START, m) <= 0) ?? matches[0];
+		} else {
+			const before = matches.filter((m) => cur.compareBoundaryPoints(Range.START_TO_END, m) >= 0);
+			target = before.length ? before[before.length - 1] : matches[matches.length - 1];
+		}
+	} else if (sel.rangeCount > 0) {
+		const caret = sel.getRangeAt(0);
+		if (!backward) {
+			target = matches.find((m) => caret.compareBoundaryPoints(Range.END_TO_START, m) <= 0) ?? matches[0];
+		} else {
+			const before = matches.filter((m) => caret.compareBoundaryPoints(Range.START_TO_END, m) >= 0);
+			target = before.length ? before[before.length - 1] : matches[matches.length - 1];
+		}
+	}
+
+	sel.removeAllRanges();
+	sel.addRange(target);
+	const el = target.startContainer.parentElement;
+	el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+	return true;
+}
+
+/** Count how many times `find` occurs in the document (case-insensitive). */
+export function countMatches(root: HTMLElement, find: string): number {
+	if (!find) return 0;
+	const lower = find.toLowerCase();
+	let count = 0;
+	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+	let node: Node | null;
+	while ((node = walker.nextNode())) {
+		const hay = (node.nodeValue ?? '').toLowerCase();
+		if (!hay) continue;
+		let idx = hay.indexOf(lower);
+		while (idx !== -1) {
+			count++;
+			idx = hay.indexOf(lower, idx + lower.length);
+		}
+	}
+	return count;
+}
+
+/** Statistics for the current selection (or zeros when nothing is selected). */
+export function selectionStats(): { words: number; characters: number } {
+	const sel = window.getSelection();
+	const text = sel ? sel.toString() : '';
+	const trimmed = text.trim();
+	return {
+		words: trimmed ? trimmed.split(/\s+/).length : 0,
+		characters: text.length,
+	};
+}
+
+// ── Table operations ───────────────────────────────────────────────────────
+/** The <table> cell (td/th) and row containing the caret, if any. */
+function currentCell(): { cell: HTMLTableCellElement; row: HTMLTableRowElement; table: HTMLTableElement } | null {
+	const sel = window.getSelection();
+	if (!sel || !sel.anchorNode) return null;
+	let node: Node | null = sel.anchorNode;
+	while (node) {
+		if (node.nodeType === Node.ELEMENT_NODE) {
+			const el = node as HTMLElement;
+			if (el.tagName === 'TD' || el.tagName === 'TH') {
+				const cell = el as HTMLTableCellElement;
+				const row = cell.parentElement as HTMLTableRowElement;
+				const table = row?.closest('table') as HTMLTableElement;
+				if (row && table) return { cell, row, table };
+			}
+		}
+		node = node.parentNode;
+	}
+	return null;
+}
+
+export const table = {
+	/** True when the caret sits inside a table cell. */
+	inTable: () => currentCell() !== null,
+	addRowAbove: () => {
+		const c = currentCell();
+		if (!c) return;
+		const row = c.row.cloneNode(true) as HTMLTableRowElement;
+		row.querySelectorAll('td,th').forEach((cell) => (cell.innerHTML = '&nbsp;'));
+		c.row.parentElement?.insertBefore(row, c.row);
+	},
+	addRowBelow: () => {
+		const c = currentCell();
+		if (!c) return;
+		const row = c.row.cloneNode(true) as HTMLTableRowElement;
+		row.querySelectorAll('td,th').forEach((cell) => (cell.innerHTML = '&nbsp;'));
+		c.row.parentElement?.insertBefore(row, c.row.nextSibling);
+	},
+	addColumnLeft: () => {
+		const c = currentCell();
+		if (!c) return;
+		const index = Array.from(c.row.children).indexOf(c.cell);
+		Array.from(c.table.rows).forEach((row) => {
+			const tag = row.cells[0]?.tagName === 'TH' ? 'th' : 'td';
+			const cell = document.createElement(tag);
+			cell.innerHTML = '&nbsp;';
+			row.insertBefore(cell, row.children[index] ?? null);
+		});
+	},
+	addColumnRight: () => {
+		const c = currentCell();
+		if (!c) return;
+		const index = Array.from(c.row.children).indexOf(c.cell) + 1;
+		Array.from(c.table.rows).forEach((row) => {
+			const tag = row.cells[0]?.tagName === 'TH' ? 'th' : 'td';
+			const cell = document.createElement(tag);
+			cell.innerHTML = '&nbsp;';
+			row.insertBefore(cell, row.children[index] ?? null);
+		});
+	},
+	deleteRow: () => {
+		const c = currentCell();
+		if (!c) return;
+		if (c.table.rows.length <= 1) {
+			c.table.remove();
+			return;
+		}
+		c.row.remove();
+	},
+	deleteColumn: () => {
+		const c = currentCell();
+		if (!c) return;
+		const index = Array.from(c.row.children).indexOf(c.cell);
+		const rowCount = c.table.rows.length;
+		Array.from(c.table.rows).forEach((row) => row.children[index]?.remove());
+		// Drop the table entirely when no columns remain.
+		if (rowCount > 0 && c.table.rows[0]?.children.length === 0) c.table.remove();
+	},
+};
+
 /** Text statistics for the status bar / Review tab. */
 export interface TextStats {
 	words: number;

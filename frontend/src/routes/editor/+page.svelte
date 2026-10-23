@@ -16,7 +16,7 @@
   import { onMount } from 'svelte';
   import NaskahRibbon from '$lib/editor/NaskahRibbon.svelte';
   import NaskahCanvas from '$lib/editor/NaskahCanvas.svelte';
-  import { textStats, replaceAll, insert } from '$lib/editor/commands';
+  import { textStats, replaceAll, insert, findNext, countMatches, selectionStats } from '$lib/editor/commands';
   import type { TextStats } from '$lib/editor/commands';
   import { downloadDocument, printDocument, readImportedFile } from '$lib/editor/export';
   import type { ExportFormat } from '$lib/editor/export';
@@ -51,6 +51,7 @@
     readingMinutes: 0,
   });
   let lastSaved = $state<string | null>(null);
+  let selStats = $state<{ words: number; characters: number }>({ words: 0, characters: 0 });
   let dirty = $state(false);
   let saving = $state(false);
 
@@ -73,6 +74,8 @@
     html = next;
     stats = nextStats;
     dirty = true;
+    // Typing collapses the selection; reflect that in the selection counter.
+    selStats = selectionStats();
   }
 
   function refreshStats() {
@@ -184,13 +187,39 @@
   }
 
   // ── Dialog actions ──────────────────────────────────────────────────────
+  let matchCount = $state(0);
+
   function doReplace() {
     const el = getEditor();
     if (!el || !findText) return;
     const res = replaceAll(el, findText, replaceText);
     html = el.innerHTML;
     refreshStats();
+    matchCount = countMatches(el, findText);
     notify.info(`${res.count} kemunculan diganti`);
+  }
+
+  /** Jump to the next/previous match of the current find text. */
+  function doFindNext(backward = false) {
+    const el = getEditor();
+    if (!el || !findText) return;
+    const found = findNext(el, findText, backward);
+    if (!found) notify.warning(`Tidak ada "${findText}"`);
+  }
+
+  /** Insert a localized date+time stamp at the caret. */
+  function insertDateTime() {
+    const now = new Date();
+    const stamp = now.toLocaleString('id-ID', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    insert.text(stamp);
+    refreshStats();
   }
 
   function openLinkDialog() {
@@ -244,6 +273,10 @@
     } else if (key === 'p') {
       e.preventDefault();
       handlePrint();
+    } else if (key === 'g') {
+      // Find next (Ctrl+G) / previous (Ctrl+Shift+G), Word-style.
+      e.preventDefault();
+      doFindNext(e.shiftKey);
     }
   }
 
@@ -256,9 +289,11 @@
     return () => clearInterval(timer);
   });
 
-  // Refresh the ribbon's pressed-state whenever a selection is made.
+  // Refresh the ribbon's pressed-state and selection stats whenever the
+  // selection changes.
   function onSelectionChange() {
     ribbon?.refreshState();
+    selStats = selectionStats();
   }
 </script>
 
@@ -309,7 +344,9 @@
     onprint={handlePrint}
     oninsertlink={openLinkDialog}
     oninsertimage={openImageDialog}
+    oninsertdatetime={insertDateTime}
     onfind={() => (showFind = true)}
+    onfindnext={doFindNext}
     onzoom={(z) => (zoom = z)}
     onpagemargin={(m) => (marginY = m)}
     onpagewidth={(w) => (pageWidth = w)}
@@ -342,6 +379,11 @@
       <span class="hidden sm:inline"><b class="text-[var(--text-primary)]">{stats.charactersNoSpaces.toLocaleString()}</b> tanpa spasi</span>
       <span class="hidden md:inline"><b class="text-[var(--text-primary)]">{stats.paragraphs}</b> paragraf</span>
       <span class="hidden md:inline">~{stats.readingMinutes} mnt baca</span>
+      {#if selStats.words > 0}
+        <span class="text-[var(--accent-primary)]" title="Teks terpilih">
+          <b>{selStats.words.toLocaleString()}</b> kata dipilih
+        </span>
+      {/if}
     </div>
     <div class="flex items-center gap-3 whitespace-nowrap">
       <span>{pageWidth === 794 ? 'A4' : pageWidth === 816 ? 'Letter' : 'A5'} · {zoom}%</span>
@@ -373,9 +415,15 @@
       <input id="naskah-find" bind:value={findText} class="w-full mb-3 px-2 py-1.5 bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-sm text-sm text-[var(--text-primary)] outline-none" placeholder="teks yang dicari" />
       <label for="naskah-replace" class="block text-[11px] font-code text-[var(--text-muted)] mb-1">Ganti dengan</label>
       <input id="naskah-replace" bind:value={replaceText} class="w-full mb-4 px-2 py-1.5 bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-sm text-sm text-[var(--text-primary)] outline-none" placeholder="teks pengganti" />
-      <div class="flex justify-end gap-2">
-        <button type="button" onclick={() => (showFind = false)} class="px-3 py-1.5 text-[11px] font-hud border border-[var(--border-color)] text-[var(--text-muted)] chamfer-sm">TUTUP</button>
+      <div class="flex items-center justify-between gap-2">
+        <div class="flex gap-2">
+          <button type="button" onclick={() => doFindNext(true)} class="px-3 py-1.5 text-[11px] font-hud border border-[var(--border-color)] text-[var(--text-primary)] chamfer-sm hover:bg-[var(--bg-elevated)]">SEBELUMNYA</button>
+          <button type="button" onclick={() => doFindNext(false)} class="px-3 py-1.5 text-[11px] font-hud border border-[var(--border-color)] text-[var(--text-primary)] chamfer-sm hover:bg-[var(--bg-elevated)]">BERIKUTNYA</button>
+        </div>
         <button type="button" onclick={doReplace} class="px-3 py-1.5 text-[11px] font-hud bg-[var(--accent-primary)] text-[var(--on-accent)] chamfer-sm">GANTI SEMUA</button>
+      </div>
+      <div class="flex justify-end mt-3">
+        <button type="button" onclick={() => (showFind = false)} class="px-3 py-1.5 text-[11px] font-hud border border-[var(--border-color)] text-[var(--text-muted)] chamfer-sm">TUTUP</button>
       </div>
     </div>
   </div>
